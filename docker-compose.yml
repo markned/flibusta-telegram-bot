@@ -1,0 +1,8 @@
+services:
+  bot:
+    build:
+      context: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false

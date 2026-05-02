@@ -1,0 +1,6 @@
+aiogram>=3.4,<4
+beautifulsoup4>=4.12,<5
+aiohttp-socks>=0.9,<1
+httpx[socks,http2]>=0.27,<1
+pydantic-settings>=2.2,<3
+lxml>=5.1,<6
