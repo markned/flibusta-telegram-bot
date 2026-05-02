@@ -6,6 +6,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     flibusta_base_url: HttpUrl = Field(default="https://flibusta.is", alias="FLIBUSTA_BASE_URL")
     http_proxy: str | None = Field(default=None, alias="HTTP_PROXY")
     telegram_proxy: str | None = Field(default=None, alias="TELEGRAM_PROXY")

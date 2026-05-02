@@ -94,7 +94,7 @@ class FlibustaClient:
 
     async def download(self, url: str, max_bytes: int) -> tuple[bytes, str, str]:
         response, content = await self._download(url, max_bytes)
-        logger.info(
+        logger.debug(
             "Flibusta download response: url=%s status=%s content_type=%s content_length=%s",
             _safe_log_url(str(response.url)),
             response.status_code,
@@ -124,7 +124,7 @@ class FlibustaClient:
                 if attempt == self.retries:
                     raise FlibustaError("Не удалось подключиться к Flibusta.") from exc
 
-            logger.warning("Flibusta request failed, retrying (%d/%d): %s", attempt, self.retries, url)
+            logger.warning("Flibusta request failed, retrying (%d/%d): %s", attempt, self.retries, _safe_log_url(url))
             await sleep(self.retry_delay * attempt)
 
         raise FlibustaError("Не удалось подключиться к Flibusta.") from last_error
@@ -145,7 +145,7 @@ class FlibustaClient:
                 if attempt == self.retries:
                     raise FlibustaError("Не удалось скачать файл с Flibusta.") from exc
 
-            logger.warning("Flibusta download failed, retrying (%d/%d): %s", attempt, self.retries, url)
+            logger.warning("Flibusta download failed, retrying (%d/%d): %s", attempt, self.retries, _safe_log_url(url))
             await sleep(self.retry_delay * attempt)
 
         raise FlibustaError("Не удалось скачать файл с Flibusta.") from last_error
@@ -164,7 +164,7 @@ class FlibustaClient:
                 return response
 
             next_url = urljoin(str(response.url), location)
-            logger.info(
+            logger.debug(
                 "Flibusta redirect %d/%d: %s -> %s",
                 redirect_index + 1,
                 self.max_redirects,
@@ -193,7 +193,7 @@ class FlibustaClient:
                         return response, b""
 
                     next_url = urljoin(str(response.url), location)
-                    logger.info(
+                    logger.debug(
                         "Flibusta redirect %d/%d: %s -> %s",
                         redirect_index + 1,
                         self.max_redirects,
@@ -213,7 +213,7 @@ class FlibustaClient:
                 if content_length and content_length > max_bytes:
                     raise FlibustaError("Файл больше лимита Telegram для этого бота.")
 
-                logger.info(
+                logger.debug(
                     "Flibusta download stream start: url=%s content_type=%s content_length=%s",
                     _safe_log_url(str(response.url)),
                     response.headers.get("content-type"),
@@ -231,7 +231,7 @@ class FlibustaClient:
                     chunks.append(chunk)
                     now = monotonic()
                     if now - last_progress_at >= DOWNLOAD_PROGRESS_INTERVAL_SECONDS:
-                        logger.info(
+                        logger.debug(
                             "Flibusta download progress: url=%s downloaded=%s content_length=%s",
                             _safe_log_url(str(response.url)),
                             downloaded,
@@ -239,7 +239,7 @@ class FlibustaClient:
                         )
                         last_progress_at = now
 
-                logger.info(
+                logger.debug(
                     "Flibusta download stream done: url=%s downloaded=%s content_length=%s",
                     _safe_log_url(str(response.url)),
                     downloaded,
@@ -462,7 +462,7 @@ def _unzip_fb2_if_needed(
                 if not item.is_dir() and item.filename.lower().endswith(".fb2")
             ]
             if len(fb2_names) != 1:
-                logger.info("Zip archive is not auto-unpacked: filename=%s fb2_files=%s", filename, len(fb2_names))
+                logger.debug("Zip archive is not auto-unpacked: filename=%s fb2_files=%s", filename, len(fb2_names))
                 return content, filename, content_type
 
             info = archive.getinfo(fb2_names[0])
@@ -471,7 +471,7 @@ def _unzip_fb2_if_needed(
 
             unpacked = archive.read(info)
             unpacked_name = _safe_archive_filename(info.filename) or _zip_filename_to_fb2(filename)
-            logger.info(
+            logger.debug(
                 "Unpacked FB2 from zip: archive=%s file=%s size=%s",
                 filename,
                 unpacked_name,

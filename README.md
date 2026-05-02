@@ -24,6 +24,7 @@ TELEGRAM_PROXY=socks5://user:password@host:port
    Если нужен один и тот же proxy, укажите одинаковое значение в обеих переменных.
    Для нестабильного proxy можно поднять `FLIBUSTA_RETRIES` и `REQUEST_TIMEOUT_SECONDS`.
    Redirect при скачивании ограничивается `FLIBUSTA_MAX_REDIRECTS`.
+   Подробные технические логи скачивания включаются через `LOG_LEVEL=DEBUG`.
 4. Запустите:
 
 ```bash

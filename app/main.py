@@ -20,12 +20,17 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.config import Settings
 from app.flibusta import BookDetails, FlibustaClient, FlibustaError
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+settings = Settings()
+logging.basicConfig(
+    level=getattr(logging, settings.log_level.upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
+if settings.log_level.upper() != "DEBUG":
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 router = Router()
-settings = Settings()
 flibusta = FlibustaClient(
     settings.base_url,
     timeout=settings.request_timeout_seconds,
