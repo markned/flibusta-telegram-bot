@@ -156,6 +156,38 @@ def test_parse_author_page_prefers_full_name_from_title() -> None:
     assert books[0].author == "Никитин Иван Иванович"
 
 
+def test_parse_author_page_skips_books_of_other_authors() -> None:
+    markup = """
+    <html>
+      <head><title>Джордж Лукас - Флибуста</title></head>
+      <body>
+        <div id="main">
+          <a href="/a/18326">Джордж Лукас</a>
+          <ul>
+            <li>
+              <a href="/b/301">Звездные войны</a>
+              <a href="/a/18326">Джордж Лукас</a>
+            </li>
+            <li>
+              <a href="/b/302">Империя наносит ответный удар</a>
+              <a href="/a/18326">Джордж Лукас</a>
+            </li>
+            <li>
+              <a href="/b/999">Невеста по ошибке, или Попаданка для лорда-дракона</a>
+              <a href="/a/77777">Лира Серебряная</a>
+            </li>
+          </ul>
+        </div>
+      </body>
+    </html>
+    """
+
+    author_name, books = parse_author_page(markup, "18326", limit=40)
+
+    assert author_name == "Джордж Лукас"
+    assert [item.book_id for item in books] == ["301", "302"]
+
+
 def test_total_pages() -> None:
     assert total_pages(0) == 1
     assert total_pages(8) == 1

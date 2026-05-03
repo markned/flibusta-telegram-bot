@@ -332,7 +332,7 @@ def parse_author_results(markup: str, limit: int = 20) -> list[AuthorResult]:
 def parse_author_page(markup: str, author_id: str, limit: int = 40) -> tuple[str, list[SearchResult]]:
     soup = BeautifulSoup(markup, "lxml")
     author_name = _extract_author_name(soup, author_id)
-    books = parse_search_results(markup, limit=limit)
+    books = _extract_author_books(soup, author_id, author_name, limit=limit)
     normalized_books = [
         SearchResult(book_id=item.book_id, title=item.title, author=author_name or item.author)
         for item in books
@@ -422,6 +422,48 @@ def _extract_author_refs(soup: BeautifulSoup, heading_author: str | None) -> lis
         seen.add(author_id)
 
     return refs
+
+
+def _extract_author_books(
+    soup: BeautifulSoup,
+    author_id: str,
+    author_name: str,
+    limit: int = 40,
+) -> list[SearchResult]:
+    main = soup.select_one("#main") or soup.body or soup
+    results: list[SearchResult] = []
+    seen: set[str] = set()
+
+    for link in main.select('a[href^="/b/"], a[href^="b/"]'):
+        href = link.get("href", "")
+        match = re.search(r"/?b/(\d+)$", href)
+        if not match:
+            continue
+
+        book_id = match.group(1)
+        if book_id in seen:
+            continue
+
+        container = link.find_parent(["li", "tr", "p", "div"])
+        if container:
+            container_author_ids = {
+                author_match.group(1)
+                for author_link in container.select('a[href^="/a/"], a[href^="a/"]')
+                if (author_match := re.match(r"/?a/(\d+)", author_link.get("href", "")))
+            }
+            if container_author_ids and author_id not in container_author_ids:
+                continue
+
+        title = _clean_text(link.get_text(" ", strip=True))
+        if not title:
+            continue
+
+        results.append(SearchResult(book_id=book_id, title=title, author=author_name or None))
+        seen.add(book_id)
+        if len(results) >= limit:
+            break
+
+    return results
 
 
 def _extract_formats(soup: BeautifulSoup, base_url: str, book_id: str) -> list[DownloadFormat]:
