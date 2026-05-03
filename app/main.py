@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import logging
 from asyncio import sleep
+from dataclasses import dataclass
 from html import escape
 from time import monotonic
 from typing import Awaitable, Callable, TypeVar
 from urllib.parse import urlparse
+from uuid import uuid4
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -19,6 +21,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import Settings
 from app.flibusta import BookDetails, FlibustaClient, FlibustaError
+from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
 
 settings = Settings()
 logging.basicConfig(
@@ -29,8 +32,23 @@ if settings.log_level.upper() != "DEBUG":
     logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+SEARCH_RESULTS_LIMIT = 40
 
 router = Router()
+
+
+@dataclass(frozen=True)
+class SearchSession:
+    session_id: str
+    user_id: int
+    chat_id: int
+    query: str
+    page: int
+    results: list
+
+
+search_sessions: dict[str, SearchSession] = {}
+
 flibusta = FlibustaClient(
     settings.base_url,
     timeout=settings.request_timeout_seconds,
@@ -104,6 +122,64 @@ async def show_book(callback: CallbackQuery) -> None:
     await telegram_retry(
         lambda: callback.message.answer(_book_text(details), reply_markup=_formats_keyboard(details))
     )
+
+
+@router.callback_query(F.data.startswith("page:"))
+async def paginate_search(callback: CallbackQuery) -> None:
+    _, session_id, page_raw = callback.data.split(":", 2)
+
+    session = search_sessions.get(session_id)
+    if session is None:
+        await callback_answer(callback)
+        await telegram_retry(lambda: callback.message.answer("Поиск устарел. Запусти его еще раз."))
+        return
+
+    if callback.from_user.id != session.user_id or callback.message.chat.id != session.chat_id:
+        await telegram_retry(lambda: callback.answer("Это не твоя выдача.", show_alert=True))
+        return
+
+    try:
+        page = int(page_raw)
+    except ValueError:
+        await callback_answer(callback)
+        await telegram_retry(lambda: callback.message.answer("Некорректная страница выдачи."))
+        return
+
+    page_count = total_pages(len(session.results))
+    if page < 0 or page >= page_count:
+        await callback_answer(callback)
+        await telegram_retry(lambda: callback.message.answer("Такой страницы выдачи нет."))
+        return
+
+    updated = SearchSession(
+        session_id=session.session_id,
+        user_id=session.user_id,
+        chat_id=session.chat_id,
+        query=session.query,
+        page=page,
+        results=session.results,
+    )
+    search_sessions[session_id] = updated
+    log_user_action(
+        callback.from_user,
+        callback.message.chat.id,
+        "search_page",
+        query=session.query,
+        page=page + 1,
+        total_pages=page_count,
+    )
+    await callback_answer(callback)
+    await telegram_retry(
+        lambda: callback.message.edit_text(
+            _search_results_text(updated),
+            reply_markup=_search_results_keyboard(updated),
+        )
+    )
+
+
+@router.callback_query(F.data == "noop")
+async def noop(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
 
 
 @router.callback_query(F.data.startswith("dl:"))
@@ -219,7 +295,7 @@ async def send_search_results(message: Message, query: str) -> None:
         logger.warning("Could not send typing action")
 
     try:
-        results = await flibusta.search(query)
+        results = await flibusta.search(query, limit=SEARCH_RESULTS_LIMIT)
     except FlibustaError as exc:
         log_user_action(
             message.from_user,
@@ -243,10 +319,7 @@ async def send_search_results(message: Message, query: str) -> None:
         await telegram_retry(lambda: message.answer("Ничего не найдено."))
         return
 
-    keyboard = InlineKeyboardBuilder()
-    for item in results:
-        label = item.title if not item.author else f"{item.title} - {item.author}"
-        keyboard.row(InlineKeyboardButton(text=label[:64], callback_data=f"book:{item.book_id}"))
+    session = _create_search_session(message.from_user.id, message.chat.id, query, results)
 
     log_user_action(
         message.from_user,
@@ -254,9 +327,15 @@ async def send_search_results(message: Message, query: str) -> None:
         "search_ok",
         query=query,
         results=len(results),
+        pages=total_pages(len(results)),
         duration=elapsed(started_at),
     )
-    await telegram_retry(lambda: message.answer("Нашел варианты:", reply_markup=keyboard.as_markup()))
+    await telegram_retry(
+        lambda: message.answer(
+            _search_results_text(session),
+            reply_markup=_search_results_keyboard(session),
+        )
+    )
 
 
 async def telegram_retry(
@@ -307,6 +386,70 @@ def short_log_value(value: object, limit: int = 160) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _create_search_session(user_id: int, chat_id: int, query: str, results: list) -> SearchSession:
+    if len(search_sessions) > 100:
+        stale_keys = list(search_sessions.keys())[:20]
+        for key in stale_keys:
+            search_sessions.pop(key, None)
+
+    session = SearchSession(
+        session_id=uuid4().hex[:10],
+        user_id=user_id,
+        chat_id=chat_id,
+        query=query,
+        page=0,
+        results=results,
+    )
+    search_sessions[session.session_id] = session
+    return session
+
+
+def _search_results_text(session: SearchSession) -> str:
+    total_results = len(session.results)
+    page_count = total_pages(total_results)
+    start = session.page * SEARCH_PAGE_SIZE + 1
+    end = min(total_results, (session.page + 1) * SEARCH_PAGE_SIZE)
+    return (
+        f"Нашел варианты по запросу: <b>{escape(session.query)}</b>\n"
+        f"Показаны {start}-{end} из {total_results}. Страница {session.page + 1}/{page_count}."
+    )
+
+
+def _search_results_keyboard(session: SearchSession):
+    keyboard = InlineKeyboardBuilder()
+    items = page_items(session.results, session.page)
+    for item in items:
+        label = item.title if not item.author else f"{item.title} - {item.author}"
+        keyboard.row(InlineKeyboardButton(text=label[:64], callback_data=f"book:{item.book_id}"))
+
+    page_count = total_pages(len(session.results))
+    if page_count > 1:
+        nav_buttons: list[InlineKeyboardButton] = []
+        if session.page > 0:
+            nav_buttons.append(
+                InlineKeyboardButton(
+                    text="<< Назад",
+                    callback_data=f"page:{session.session_id}:{session.page - 1}",
+                )
+            )
+        nav_buttons.append(
+            InlineKeyboardButton(
+                text=f"{session.page + 1}/{page_count}",
+                callback_data="noop",
+            )
+        )
+        if session.page < page_count - 1:
+            nav_buttons.append(
+                InlineKeyboardButton(
+                    text="Еще >>",
+                    callback_data=f"page:{session.session_id}:{session.page + 1}",
+                )
+            )
+        keyboard.row(*nav_buttons)
+
+    return keyboard.as_markup()
 
 
 def log_startup_config() -> None:

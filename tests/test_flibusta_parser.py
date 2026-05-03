@@ -2,6 +2,7 @@ from io import BytesIO
 import zipfile
 
 from app.flibusta import _unzip_fb2_if_needed, parse_book_details, parse_search_results
+from app.pagination import page_items, total_pages
 
 
 def test_parse_search_results() -> None:
@@ -80,3 +81,17 @@ def test_unzip_fb2_if_needed() -> None:
     assert content == b"<FictionBook />"
     assert filename == "test.fb2"
     assert content_type == "application/x-fictionbook+xml"
+
+
+def test_total_pages() -> None:
+    assert total_pages(0) == 1
+    assert total_pages(8) == 1
+    assert total_pages(9) == 2
+    assert total_pages(40) == 5
+
+
+def test_page_items() -> None:
+    values = list(range(20))
+    assert page_items(values, 0) == list(range(8))
+    assert page_items(values, 1) == list(range(8, 16))
+    assert page_items(values, 2) == list(range(16, 20))
