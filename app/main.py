@@ -32,7 +32,6 @@ if settings.log_level.upper() != "DEBUG":
     logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
-SEARCH_RESULTS_LIMIT = 40
 
 router = Router()
 
@@ -277,7 +276,7 @@ async def show_author_books(callback: CallbackQuery) -> None:
         author_id=author_id,
     )
     try:
-        author_name, books = await flibusta.author_books(author_id, limit=SEARCH_RESULTS_LIMIT)
+        author_name, books = await flibusta.author_books(author_id, limit=settings.search_results_limit)
     except FlibustaError as exc:
         log_user_action(
             callback.from_user,
@@ -443,7 +442,7 @@ async def send_search_results(message: Message, query: str) -> None:
         logger.warning("Could not send typing action")
 
     try:
-        results = await flibusta.search(query, limit=SEARCH_RESULTS_LIMIT)
+        results = await flibusta.search(query, limit=settings.search_results_limit)
     except FlibustaError as exc:
         log_user_action(
             message.from_user,
@@ -498,7 +497,7 @@ async def send_author_results(message: Message, query: str) -> None:
         logger.warning("Could not send typing action")
 
     try:
-        authors = await flibusta.search_authors(query, limit=SEARCH_RESULTS_LIMIT)
+        authors = await flibusta.search_authors(query, limit=settings.search_results_limit)
     except FlibustaError as exc:
         log_user_action(
             message.from_user,
