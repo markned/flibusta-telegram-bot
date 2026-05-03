@@ -44,6 +44,9 @@ class BookDetails:
     book_id: str
     title: str
     authors: list[str]
+    genres: list[str]
+    file_size: str | None
+    pages: int | None
     annotation: str | None
     formats: list[DownloadFormat]
     page_url: str
@@ -344,6 +347,8 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
         title = f"Книга {book_id}"
 
     authors = _extract_authors(soup, heading_author)
+    genres = _extract_genres(soup)
+    file_size, pages = _extract_book_stats(soup)
 
     annotation = _extract_annotation(soup)
     formats = _extract_formats(soup, base_url, book_id)
@@ -352,6 +357,9 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
         book_id=book_id,
         title=title,
         authors=_dedupe(authors),
+        genres=genres,
+        file_size=file_size,
+        pages=pages,
         annotation=annotation,
         formats=formats,
         page_url=page_url,
@@ -410,6 +418,27 @@ def _extract_formats(soup: BeautifulSoup, base_url: str, book_id: str) -> list[D
         seen.add(code)
 
     return formats
+
+
+def _extract_genres(soup: BeautifulSoup) -> list[str]:
+    genres = [
+        _clean_text(link.get_text(" ", strip=True))
+        for link in soup.select('a[href^="/g/"], a[href^="g/"]')
+        if _clean_text(link.get_text(" ", strip=True))
+    ]
+    return _dedupe([genre for genre in genres if genre != "[Все]"])
+
+
+def _extract_book_stats(soup: BeautifulSoup) -> tuple[str | None, int | None]:
+    main = soup.select_one("#main") or soup.body or soup
+    text = _clean_text(main.get_text(" ", strip=True))
+    match = re.search(r"\b(\d+(?:[.,]\d+)?\s*[KMG]B?|\d+(?:[.,]\d+)?\s*[KMG])\s*,\s*(\d+)\s*с\.", text, re.I)
+    if match:
+        return match.group(1).upper().replace(" ", ""), int(match.group(2))
+
+    pages_match = re.search(r"\b(\d+)\s*с\.", text, re.I)
+    pages = int(pages_match.group(1)) if pages_match else None
+    return None, pages
 
 
 def _extract_book_heading(soup: BeautifulSoup) -> str:

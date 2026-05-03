@@ -44,8 +44,10 @@ def test_parse_book_details() -> None:
     markup = """
     <h1>Мастер и Маргарита</h1>
     <a href="/a/1">Михаил Булгаков</a>
+    <a href="/g/1">Роман</a>
     <h2>Аннотация</h2>
     <p>Роман о визите Воланда в Москву.</p>
+    <p>Мастер и Маргарита 20K, 11 с. (читать)</p>
     <a href="/b/123/fb2">fb2</a>
     <a href="/b/123/epub">epub</a>
     """
@@ -54,6 +56,9 @@ def test_parse_book_details() -> None:
 
     assert details.title == "Мастер и Маргарита"
     assert details.authors == ["Михаил Булгаков"]
+    assert details.genres == ["Роман"]
+    assert details.file_size == "20K"
+    assert details.pages == 11
     assert details.annotation == "Роман о визите Воланда в Москву."
     assert [item.code for item in details.formats] == ["fb2", "epub"]
     assert details.formats[0].url == "https://flibusta.is/b/123/fb2"

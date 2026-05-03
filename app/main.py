@@ -758,7 +758,18 @@ def safe_proxy_info(proxy: str | None) -> str:
 def _book_text(details: BookDetails) -> str:
     parts = [f"<b>{escape(details.title)}</b>"]
     if details.authors:
-        parts.append("Автор: " + escape(", ".join(details.authors[:5])))
+        parts.append(escape(", ".join(details.authors[:5])))
+
+    meta_parts: list[str] = []
+    if details.genres:
+        meta_parts.append(", ".join(details.genres[:3]))
+    if details.file_size:
+        meta_parts.append(details.file_size)
+    if details.pages:
+        meta_parts.append(f"{details.pages} с.")
+    if meta_parts:
+        parts.append(escape(" · ".join(meta_parts)))
+
     if details.annotation:
         parts.append(escape(details.annotation))
     if not details.formats:
