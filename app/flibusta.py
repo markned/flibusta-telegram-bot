@@ -433,6 +433,41 @@ def _extract_author_books(
     main = soup.select_one("#main") or soup.body or soup
     results: list[SearchResult] = []
     seen: set[str] = set()
+    containers = list(main.find_all(["li", "tr", "p"]))
+
+    for container in containers:
+        book_link = container.select_one('a[href^="/b/"], a[href^="b/"]')
+        if book_link is None:
+            continue
+
+        container_author_ids = {
+            author_match.group(1)
+            for author_link in container.select('a[href^="/a/"], a[href^="a/"]')
+            if (author_match := re.match(r"/?a/(\d+)", author_link.get("href", "")))
+        }
+        if container_author_ids and author_id not in container_author_ids:
+            continue
+
+        href = book_link.get("href", "")
+        match = re.search(r"/?b/(\d+)$", href)
+        if not match:
+            continue
+
+        book_id = match.group(1)
+        if book_id in seen:
+            continue
+
+        title = _clean_text(book_link.get_text(" ", strip=True))
+        if not title:
+            continue
+
+        results.append(SearchResult(book_id=book_id, title=title, author=author_name or None))
+        seen.add(book_id)
+        if len(results) >= limit:
+            break
+
+    if results:
+        return results
 
     for link in main.select('a[href^="/b/"], a[href^="b/"]'):
         href = link.get("href", "")
@@ -445,14 +480,16 @@ def _extract_author_books(
             continue
 
         container = link.find_parent(["li", "tr", "p", "div"])
-        if container:
-            container_author_ids = {
-                author_match.group(1)
-                for author_link in container.select('a[href^="/a/"], a[href^="a/"]')
-                if (author_match := re.match(r"/?a/(\d+)", author_link.get("href", "")))
-            }
-            if container_author_ids and author_id not in container_author_ids:
-                continue
+        if container is None:
+            continue
+
+        container_author_ids = {
+            author_match.group(1)
+            for author_link in container.select('a[href^="/a/"], a[href^="a/"]')
+            if (author_match := re.match(r"/?a/(\d+)", author_link.get("href", "")))
+        }
+        if author_id not in container_author_ids:
+            continue
 
         title = _clean_text(link.get_text(" ", strip=True))
         if not title:

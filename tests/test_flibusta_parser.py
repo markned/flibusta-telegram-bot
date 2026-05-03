@@ -188,6 +188,31 @@ def test_parse_author_page_skips_books_of_other_authors() -> None:
     assert [item.book_id for item in books] == ["301", "302"]
 
 
+def test_parse_author_page_fallback_div_with_matching_author() -> None:
+    markup = """
+    <html>
+      <head><title>Дейл Карнеги - Флибуста</title></head>
+      <body>
+        <div id="main">
+          <div class="book-entry">
+            <a href="/b/422006">Как завоевывать друзей и оказывать влияние на людей</a>
+            <span><a href="/a/900">Дейл Карнеги</a></span>
+          </div>
+          <div class="book-entry">
+            <a href="/b/999001">Чужая книга</a>
+            <span><a href="/a/901">Другой автор</a></span>
+          </div>
+        </div>
+      </body>
+    </html>
+    """
+
+    author_name, books = parse_author_page(markup, "900", limit=40)
+
+    assert author_name == "Дейл Карнеги"
+    assert [item.book_id for item in books] == ["422006"]
+
+
 def test_total_pages() -> None:
     assert total_pages(0) == 1
     assert total_pages(8) == 1
