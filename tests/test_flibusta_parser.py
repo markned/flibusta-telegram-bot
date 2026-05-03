@@ -56,6 +56,7 @@ def test_parse_book_details() -> None:
 
     assert details.title == "Мастер и Маргарита"
     assert details.authors == ["Михаил Булгаков"]
+    assert [(item.author_id, item.name) for item in details.author_refs] == [("1", "Михаил Булгаков")]
     assert details.genres == ["Роман"]
     assert details.file_size == "20K"
     assert details.pages == 11
@@ -88,6 +89,7 @@ def test_parse_book_details_ignores_site_heading_and_read_link() -> None:
 
     assert details.title == "Вино из одуванчиков"
     assert details.authors == ["Рэй Брэдбери"]
+    assert [(item.author_id, item.name) for item in details.author_refs] == [("1", "Рэй Брэдбери")]
     assert [item.code for item in details.formats] == ["fb2", "epub"]
 
 
@@ -130,6 +132,28 @@ def test_parse_author_page() -> None:
     assert author_name == "Анджей Сапковский"
     assert [item.book_id for item in books] == ["100", "101"]
     assert all(item.author == "Анджей Сапковский" for item in books)
+
+
+def test_parse_author_page_prefers_full_name_from_title() -> None:
+    markup = """
+    <html>
+      <head><title>Никитин Иван Иванович - Флибуста</title></head>
+      <body>
+        <h1>Флибуста</h1>
+        <div id="main">
+          <a href="/a/55">Никитин</a>
+          <ul>
+            <li><a href="/b/201">Книга 1</a></li>
+          </ul>
+        </div>
+      </body>
+    </html>
+    """
+
+    author_name, books = parse_author_page(markup, "55", limit=40)
+
+    assert author_name == "Никитин Иван Иванович"
+    assert books[0].author == "Никитин Иван Иванович"
 
 
 def test_total_pages() -> None:

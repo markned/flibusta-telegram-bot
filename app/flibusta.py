@@ -44,6 +44,7 @@ class BookDetails:
     book_id: str
     title: str
     authors: list[str]
+    author_refs: list[AuthorResult]
     genres: list[str]
     file_size: str | None
     pages: int | None
@@ -346,7 +347,8 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
     if not title:
         title = f"Книга {book_id}"
 
-    authors = _extract_authors(soup, heading_author)
+    author_refs = _extract_author_refs(soup, heading_author)
+    authors = [item.name for item in author_refs] or _extract_authors(soup, heading_author)
     genres = _extract_genres(soup)
     file_size, pages = _extract_book_stats(soup)
 
@@ -357,6 +359,7 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
         book_id=book_id,
         title=title,
         authors=_dedupe(authors),
+        author_refs=author_refs,
         genres=genres,
         file_size=file_size,
         pages=pages,
@@ -367,12 +370,6 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
 
 
 def _extract_author_name(soup: BeautifulSoup, author_id: str) -> str:
-    author_link = soup.select_one(f'a[href="/a/{author_id}"], a[href="a/{author_id}"]')
-    if author_link:
-        author = _clean_text(author_link.get_text(" ", strip=True))
-        if author and author != "[Все]":
-            return author
-
     for node in soup.find_all(["h1", "h2"]):
         text = _clean_text(node.get_text(" ", strip=True))
         if text and text.lower() not in {"флибуста", "книги"}:
@@ -382,9 +379,49 @@ def _extract_author_name(soup: BeautifulSoup, author_id: str) -> str:
     if title_node:
         title = _clean_text(title_node.get_text(" ", strip=True))
         title = re.sub(r"\s*-\s*Флибуста\s*$", "", title, flags=re.I)
-        return title
+        if title:
+            return title
+
+    author_link = soup.select_one(f'a[href="/a/{author_id}"], a[href="a/{author_id}"]')
+    if author_link:
+        author = _clean_text(author_link.get_text(" ", strip=True))
+        if author and author != "[Все]":
+            return author
 
     return ""
+
+
+def _extract_author_refs(soup: BeautifulSoup, heading_author: str | None) -> list[AuthorResult]:
+    if heading_author:
+        return [AuthorResult(author_id="", name=heading_author)]
+
+    refs: list[AuthorResult] = []
+    seen: set[str] = set()
+    main = soup.select_one("#main") or soup.body or soup
+    for node in main.descendants:
+        if isinstance(node, str) and re.search("Аннотация|Скачать|Жанр", node, re.I):
+            break
+
+        if getattr(node, "name", None) != "a":
+            continue
+
+        href = node.get("href", "")
+        match = re.match(r"/?a/(\d+)", href)
+        if not match:
+            continue
+
+        author_id = match.group(1)
+        if author_id in seen:
+            continue
+
+        name = _clean_text(node.get_text(" ", strip=True))
+        if not name or name == "[Все]":
+            continue
+
+        refs.append(AuthorResult(author_id=author_id, name=name))
+        seen.add(author_id)
+
+    return refs
 
 
 def _extract_formats(soup: BeautifulSoup, base_url: str, book_id: str) -> list[DownloadFormat]:

@@ -42,6 +42,7 @@ class SearchSession:
     user_id: int
     chat_id: int
     query: str
+    title: str | None
     page: int
     results: list
 
@@ -147,6 +148,68 @@ async def show_book(callback: CallbackQuery) -> None:
     )
 
 
+@router.callback_query(F.data.startswith("bauthor:"))
+async def show_book_author_books(callback: CallbackQuery) -> None:
+    author_id = callback.data.split(":", 1)[1]
+    await callback_answer(callback)
+
+    started_at = monotonic()
+    log_user_action(
+        callback.from_user,
+        callback.message.chat.id,
+        "book_author_open",
+        author_id=author_id,
+    )
+    try:
+        author_name, books = await flibusta.author_books(author_id, limit=settings.search_results_limit)
+    except FlibustaError as exc:
+        log_user_action(
+            callback.from_user,
+            callback.message.chat.id,
+            "book_author_open_failed",
+            author_id=author_id,
+            error=str(exc),
+            duration=elapsed(started_at),
+        )
+        await telegram_retry(lambda: callback.message.answer(str(exc)))
+        return
+
+    if not books:
+        log_user_action(
+            callback.from_user,
+            callback.message.chat.id,
+            "book_author_open_empty",
+            author_id=author_id,
+            duration=elapsed(started_at),
+        )
+        await telegram_retry(lambda: callback.message.answer("У этого автора книги не найдены."))
+        return
+
+    book_session = _create_search_session(
+        callback.from_user.id,
+        callback.message.chat.id,
+        f"author:{author_name}",
+        books,
+        title=f"Книги автора: <b>{escape(author_name)}</b>",
+    )
+    log_user_action(
+        callback.from_user,
+        callback.message.chat.id,
+        "book_author_open_ok",
+        author_id=author_id,
+        author=author_name,
+        books=len(books),
+        pages=total_pages(len(books)),
+        duration=elapsed(started_at),
+    )
+    await telegram_retry(
+        lambda: callback.message.answer(
+            _search_results_text(book_session),
+            reply_markup=_search_results_keyboard(book_session),
+        )
+    )
+
+
 @router.callback_query(F.data.startswith("page:"))
 async def paginate_search(callback: CallbackQuery) -> None:
     _, session_id, page_raw = callback.data.split(":", 2)
@@ -179,6 +242,7 @@ async def paginate_search(callback: CallbackQuery) -> None:
         user_id=session.user_id,
         chat_id=session.chat_id,
         query=session.query,
+        title=session.title,
         page=page,
         results=session.results,
     )
@@ -305,6 +369,7 @@ async def show_author_books(callback: CallbackQuery) -> None:
         callback.message.chat.id,
         f"author:{author_name}",
         books,
+        title=f"Книги автора: <b>{escape(author_name)}</b>",
     )
     log_user_action(
         callback.from_user,
@@ -318,7 +383,7 @@ async def show_author_books(callback: CallbackQuery) -> None:
     )
     await telegram_retry(
         lambda: callback.message.answer(
-            _search_results_text(book_session, title=f"Книги автора: <b>{escape(author_name)}</b>"),
+            _search_results_text(book_session),
             reply_markup=_search_results_keyboard(book_session),
         )
     )
@@ -589,7 +654,13 @@ def short_log_value(value: object, limit: int = 160) -> str:
     return text[: limit - 3] + "..."
 
 
-def _create_search_session(user_id: int, chat_id: int, query: str, results: list) -> SearchSession:
+def _create_search_session(
+    user_id: int,
+    chat_id: int,
+    query: str,
+    results: list,
+    title: str | None = None,
+) -> SearchSession:
     _prune_sessions(search_sessions)
 
     session = SearchSession(
@@ -597,6 +668,7 @@ def _create_search_session(user_id: int, chat_id: int, query: str, results: list
         user_id=user_id,
         chat_id=chat_id,
         query=query,
+        title=title,
         page=0,
         results=results,
     )
@@ -630,7 +702,7 @@ def _search_results_text(session: SearchSession, title: str | None = None) -> st
     page_count = total_pages(total_results)
     start = session.page * SEARCH_PAGE_SIZE + 1
     end = min(total_results, (session.page + 1) * SEARCH_PAGE_SIZE)
-    heading = title or f"Нашел варианты по запросу: <b>{escape(session.query)}</b>"
+    heading = title or session.title or f"Нашел варианты по запросу: <b>{escape(session.query)}</b>"
     return (
         f"{heading}\n"
         f"Показаны {start}-{end} из {total_results}. Страница {session.page + 1}/{page_count}."
@@ -777,13 +849,29 @@ def _book_text(details: BookDetails) -> str:
 
 
 def _formats_keyboard(details: BookDetails):
-    if not details.formats:
+    author_buttons = [item for item in details.author_refs[:3] if item.author_id]
+    if not details.formats and not author_buttons:
         return None
 
     keyboard = InlineKeyboardBuilder()
+    for item in author_buttons:
+        keyboard.row(
+            InlineKeyboardButton(
+                text=f"Автор: {item.name[:48]}",
+                callback_data=f"bauthor:{item.author_id}",
+            )
+        )
+
+    format_row: list[InlineKeyboardButton] = []
     for item in details.formats:
-        keyboard.button(text=item.label, callback_data=f"dl:{details.book_id}:{item.code}")
-    keyboard.adjust(3)
+        format_row.append(InlineKeyboardButton(text=item.label, callback_data=f"dl:{details.book_id}:{item.code}"))
+        if len(format_row) == 3:
+            keyboard.row(*format_row)
+            format_row = []
+
+    if format_row:
+        keyboard.row(*format_row)
+
     return keyboard.as_markup()
 
 
