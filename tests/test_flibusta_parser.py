@@ -1,7 +1,13 @@
 from io import BytesIO
 import zipfile
 
-from app.flibusta import _unzip_fb2_if_needed, parse_book_details, parse_search_results
+from app.flibusta import (
+    _unzip_fb2_if_needed,
+    parse_author_page,
+    parse_author_results,
+    parse_book_details,
+    parse_search_results,
+)
 from app.pagination import page_items, total_pages
 
 
@@ -18,6 +24,20 @@ def test_parse_search_results() -> None:
     assert [item.book_id for item in results] == ["123", "456"]
     assert results[0].title == "Мастер и Маргарита"
     assert results[0].author == "Михаил Булгаков"
+
+
+def test_parse_author_results() -> None:
+    markup = """
+    <ul>
+      <li><a href="/a/10">Анджей Сапковский</a></li>
+      <li><a href="/a/11">Алексей Пехов</a></li>
+    </ul>
+    """
+
+    results = parse_author_results(markup)
+
+    assert [item.author_id for item in results] == ["10", "11"]
+    assert results[0].name == "Анджей Сапковский"
 
 
 def test_parse_book_details() -> None:
@@ -81,6 +101,30 @@ def test_unzip_fb2_if_needed() -> None:
     assert content == b"<FictionBook />"
     assert filename == "test.fb2"
     assert content_type == "application/x-fictionbook+xml"
+
+
+def test_parse_author_page() -> None:
+    markup = """
+    <html>
+      <head><title>Анджей Сапковский - Флибуста</title></head>
+      <body>
+        <h1>Флибуста</h1>
+        <div id="main">
+          <a href="/a/10">Анджей Сапковский</a>
+          <ul>
+            <li><a href="/b/100">Последнее желание</a></li>
+            <li><a href="/b/101">Меч предназначения</a></li>
+          </ul>
+        </div>
+      </body>
+    </html>
+    """
+
+    author_name, books = parse_author_page(markup, "10", limit=40)
+
+    assert author_name == "Анджей Сапковский"
+    assert [item.book_id for item in books] == ["100", "101"]
+    assert all(item.author == "Анджей Сапковский" for item in books)
 
 
 def test_total_pages() -> None:

@@ -27,6 +27,12 @@ class SearchResult:
 
 
 @dataclass(frozen=True)
+class AuthorResult:
+    author_id: str
+    name: str
+
+
+@dataclass(frozen=True)
 class DownloadFormat:
     code: str
     label: str
@@ -86,6 +92,20 @@ class FlibustaClient:
         url = f"{self.base_url}/booksearch?ask={quote_plus(query)}"
         response = await self._get(url)
         return parse_search_results(response.text, limit=limit)
+
+    async def search_authors(self, query: str, limit: int = 20) -> list[AuthorResult]:
+        query = query.strip()
+        if not query:
+            return []
+
+        url = f"{self.base_url}/booksearch?ask={quote_plus(query)}"
+        response = await self._get(url)
+        return parse_author_results(response.text, limit=limit)
+
+    async def author_books(self, author_id: str, limit: int = 40) -> tuple[str, list[SearchResult]]:
+        page_url = urljoin(self.base_url + "/", f"a/{author_id}")
+        response = await self._get(page_url)
+        return parse_author_page(response.text, author_id, limit=limit)
 
     async def details(self, book_id: str) -> BookDetails:
         page_url = urljoin(self.base_url + "/", f"b/{book_id}")
@@ -278,6 +298,44 @@ def parse_search_results(markup: str, limit: int = 8) -> list[SearchResult]:
     return results
 
 
+def parse_author_results(markup: str, limit: int = 20) -> list[AuthorResult]:
+    soup = BeautifulSoup(markup, "lxml")
+    results: list[AuthorResult] = []
+    seen: set[str] = set()
+
+    for link in soup.select('a[href^="/a/"], a[href^="a/"]'):
+        href = link.get("href", "")
+        match = re.search(r"/?a/(\d+)$", href)
+        if not match:
+            continue
+
+        author_id = match.group(1)
+        if author_id in seen:
+            continue
+
+        name = _clean_text(link.get_text(" ", strip=True))
+        if not name or name == "[Все]":
+            continue
+
+        results.append(AuthorResult(author_id=author_id, name=name))
+        seen.add(author_id)
+        if len(results) >= limit:
+            break
+
+    return results
+
+
+def parse_author_page(markup: str, author_id: str, limit: int = 40) -> tuple[str, list[SearchResult]]:
+    soup = BeautifulSoup(markup, "lxml")
+    author_name = _extract_author_name(soup, author_id)
+    books = parse_search_results(markup, limit=limit)
+    normalized_books = [
+        SearchResult(book_id=item.book_id, title=item.title, author=author_name or item.author)
+        for item in books
+    ]
+    return author_name or f"Автор {author_id}", normalized_books
+
+
 def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) -> BookDetails:
     soup = BeautifulSoup(markup, "lxml")
     heading = _extract_book_heading(soup)
@@ -298,6 +356,27 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
         formats=formats,
         page_url=page_url,
     )
+
+
+def _extract_author_name(soup: BeautifulSoup, author_id: str) -> str:
+    author_link = soup.select_one(f'a[href="/a/{author_id}"], a[href="a/{author_id}"]')
+    if author_link:
+        author = _clean_text(author_link.get_text(" ", strip=True))
+        if author and author != "[Все]":
+            return author
+
+    for node in soup.find_all(["h1", "h2"]):
+        text = _clean_text(node.get_text(" ", strip=True))
+        if text and text.lower() not in {"флибуста", "книги"}:
+            return text
+
+    title_node = soup.find("title")
+    if title_node:
+        title = _clean_text(title_node.get_text(" ", strip=True))
+        title = re.sub(r"\s*-\s*Флибуста\s*$", "", title, flags=re.I)
+        return title
+
+    return ""
 
 
 def _extract_formats(soup: BeautifulSoup, base_url: str, book_id: str) -> list[DownloadFormat]:
