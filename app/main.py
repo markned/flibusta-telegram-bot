@@ -830,6 +830,10 @@ def _book_text(details: BookDetails) -> str:
     parts = [f"<b>{escape(details.title)}</b>"]
     if details.authors:
         parts.append(escape(", ".join(details.authors[:5])))
+    if details.translators:
+        parts.append(f"Перевод: {escape(', '.join(details.translators[:5]))}")
+    if details.illustrators:
+        parts.append(f"Иллюстрации: {escape(', '.join(details.illustrators[:5]))}")
 
     meta_parts: list[str] = []
     if details.genres:

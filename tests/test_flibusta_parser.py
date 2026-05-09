@@ -65,6 +65,28 @@ def test_parse_book_details() -> None:
     assert details.formats[0].url == "https://flibusta.is/b/123/fb2"
 
 
+def test_parse_book_details_separates_translators_and_illustrators() -> None:
+    markup = """
+    <div id="main">
+      <h2>Гарри Поттер и Волшебный камень (fb2)</h2>
+      <a href="/a/1">Джоан Роулинг</a>
+      <span>(перевод:</span>
+      <span><a href="/a/2">Мария Викторовна Спивак</a>)</span>
+      <span>(иллюстрации: <a href="/a/3">Джим Кей</a>)</span>
+      <h2>Аннотация</h2>
+      <p>Описание.</p>
+      <a href="/b/321/fb2">fb2</a>
+    </div>
+    """
+
+    details = parse_book_details(markup, "https://flibusta.is", "321", "https://flibusta.is/b/321")
+
+    assert details.authors == ["Джоан Роулинг"]
+    assert [(item.author_id, item.name) for item in details.author_refs] == [("1", "Джоан Роулинг")]
+    assert details.translators == ["Мария Викторовна Спивак"]
+    assert details.illustrators == ["Джим Кей"]
+
+
 def test_parse_book_details_ignores_site_heading_and_read_link() -> None:
     markup = """
     <html>

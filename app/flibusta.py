@@ -45,6 +45,8 @@ class BookDetails:
     title: str
     authors: list[str]
     author_refs: list[AuthorResult]
+    translators: list[str]
+    illustrators: list[str]
     genres: list[str]
     file_size: str | None
     pages: int | None
@@ -347,8 +349,21 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
     if not title:
         title = f"Книга {book_id}"
 
-    author_refs = _extract_author_refs(soup, heading_author)
+    translators = _extract_contributor_refs(soup, role="translator")
+    illustrators = _extract_contributor_refs(soup, role="illustrator")
+    non_author_ids = {
+        item.author_id
+        for item in [*translators, *illustrators]
+        if item.author_id
+    }
+    non_author_names = {_normalize_name(item.name) for item in [*translators, *illustrators]}
+    author_refs = [
+        item
+        for item in _extract_author_refs(soup, heading_author)
+        if item.author_id not in non_author_ids and _normalize_name(item.name) not in non_author_names
+    ]
     authors = [item.name for item in author_refs] or _extract_authors(soup, heading_author)
+    authors = [author for author in authors if _normalize_name(author) not in non_author_names]
     genres = _extract_genres(soup)
     file_size, pages = _extract_book_stats(soup)
 
@@ -360,6 +375,8 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
         title=title,
         authors=_dedupe(authors),
         author_refs=author_refs,
+        translators=_dedupe([item.name for item in translators]),
+        illustrators=_dedupe([item.name for item in illustrators]),
         genres=genres,
         file_size=file_size,
         pages=pages,
@@ -417,6 +434,49 @@ def _extract_author_refs(soup: BeautifulSoup, heading_author: str | None) -> lis
         name = _clean_text(node.get_text(" ", strip=True))
         if not name or name == "[Все]":
             continue
+        if _is_non_author_link(node):
+            continue
+
+        refs.append(AuthorResult(author_id=author_id, name=name))
+        seen.add(author_id)
+
+    return refs
+
+
+def _extract_contributor_refs(soup: BeautifulSoup, role: str) -> list[AuthorResult]:
+    refs: list[AuthorResult] = []
+    seen: set[str] = set()
+    role_scope = False
+    main = soup.select_one("#main") or soup.body or soup
+
+    for node in main.descendants:
+        if isinstance(node, str):
+            if _is_book_details_boundary(node):
+                break
+            text = _clean_text(node).lower()
+            if role_scope and _has_other_role_marker(text, role):
+                role_scope = False
+            if _has_role_marker(text, role):
+                role_scope = True
+            elif role_scope and ")" in text:
+                role_scope = False
+            continue
+
+        if getattr(node, "name", None) != "a":
+            continue
+
+        href = node.get("href", "")
+        match = re.match(r"/?a/(\d+)", href)
+        if not match or not (role_scope or _is_role_link(node, role)):
+            continue
+
+        name = _clean_text(node.get_text(" ", strip=True))
+        if not name or name == "[Все]":
+            continue
+
+        author_id = match.group(1)
+        if author_id in seen:
+            continue
 
         refs.append(AuthorResult(author_id=author_id, name=name))
         seen.add(author_id)
@@ -433,9 +493,8 @@ def _extract_author_books(
     main = soup.select_one("#main") or soup.body or soup
     results: list[SearchResult] = []
     seen: set[str] = set()
-    containers = list(main.find_all(["li", "tr", "p"]))
 
-    for container in containers:
+    for container in main.find_all(["li", "tr", "p"]):
         book_link = container.select_one('a[href^="/b/"], a[href^="b/"]')
         if book_link is None:
             continue
@@ -534,6 +593,76 @@ def _extract_formats(soup: BeautifulSoup, base_url: str, book_id: str) -> list[D
         seen.add(code)
 
     return formats
+
+
+def _is_non_author_link(node) -> bool:
+    return _is_role_link(node, "translator") or _is_role_link(node, "illustrator")
+
+
+def _is_role_link(node, role: str) -> bool:
+    node_text = _clean_text(node.get_text(" ", strip=True)).lower()
+    for parent in node.parents:
+        if getattr(parent, "name", None) in {"body", "html"}:
+            break
+
+        text = _clean_text(parent.get_text(" ", strip=True)).lower()
+        if len(text) > 500:
+            continue
+        if _role_marker_points_to_text(text, node_text, role):
+            return True
+
+    return False
+
+
+def _role_marker_points_to_text(text: str, node_text: str, role: str) -> bool:
+    node_index = text.find(node_text) if node_text else -1
+    if node_index == -1:
+        marker = _role_marker_match(text, role)
+        return marker is not None
+
+    role_markers = [
+        match
+        for match in _role_marker_matches(text, role)
+        if match.start() <= node_index
+    ]
+    if not role_markers:
+        return False
+
+    nearest_role_marker = role_markers[-1]
+    return not any(
+        nearest_role_marker.start() < match.start() <= node_index
+        for other_role in {"translator", "illustrator"} - {role}
+        for match in _role_marker_matches(text, other_role)
+    )
+
+
+def _has_role_marker(text: str, role: str) -> bool:
+    return _role_marker_match(text, role) is not None
+
+
+def _has_other_role_marker(text: str, role: str) -> bool:
+    roles = {"translator", "illustrator"} - {role}
+    return any(_has_role_marker(text, item) for item in roles)
+
+
+def _role_marker_match(text: str, role: str) -> re.Match[str] | None:
+    return next(_role_marker_matches(text, role), None)
+
+
+def _role_marker_matches(text: str, role: str) -> Iterable[re.Match[str]]:
+    if role == "translator":
+        return re.finditer(r"(?:перевод|пер\.)\s*:?", text, re.I)
+    if role == "illustrator":
+        return re.finditer(r"(?:иллюстрац(?:ии|ия|ий)?|илл\.|художник|рисунки)\s*:?", text, re.I)
+    return iter(())
+
+
+def _is_book_details_boundary(text: str) -> bool:
+    return bool(re.search("Аннотация|Скачать|Жанр", text, re.I))
+
+
+def _normalize_name(value: str) -> str:
+    return _clean_text(value).casefold()
 
 
 def _extract_genres(soup: BeautifulSoup) -> list[str]:
