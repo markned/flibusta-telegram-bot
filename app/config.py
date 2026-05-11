@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     )
     polling_retry_delay_seconds: float = Field(default=15, alias="POLLING_RETRY_DELAY_SECONDS")
     max_download_mb: int = Field(default=45, alias="MAX_DOWNLOAD_MB")
+    telegram_max_upload_mb: int = Field(default=50, alias="TELEGRAM_MAX_UPLOAD_MB")
     search_results_limit: int = Field(default=40, alias="SEARCH_RESULTS_LIMIT")
 
     @property

@@ -13,9 +13,9 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ChatAction, ParseMode
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.exceptions import TelegramBadRequest, TelegramEntityTooLarge, TelegramNetworkError
 from aiogram.filters import Command, CommandObject
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, Message
+from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, KeyboardButton, Message, ReplyKeyboardMarkup
 from aiogram.types import User
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -32,6 +32,8 @@ if settings.log_level.upper() != "DEBUG":
     logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
+BOOK_SEARCH_BUTTON = "Поиск книги"
+AUTHOR_SEARCH_BUTTON = "Поиск автора"
 
 router = Router()
 
@@ -59,6 +61,7 @@ class AuthorSession:
 
 search_sessions: dict[str, SearchSession] = {}
 author_sessions: dict[str, AuthorSession] = {}
+user_search_modes: dict[int, str] = {}
 
 flibusta = FlibustaClient(
     settings.base_url,
@@ -76,7 +79,8 @@ async def start(message: Message) -> None:
     await telegram_retry(
         lambda: message.answer(
             "Отправь название книги или автора. Еще можно использовать /search &lt;запрос&gt; "
-            "или /author &lt;автор&gt;."
+            "или /author &lt;автор&gt;.",
+            reply_markup=main_reply_keyboard(),
         )
     )
 
@@ -110,6 +114,26 @@ async def search_text(message: Message) -> None:
     text = (message.text or "").strip()
     if text.startswith("/"):
         return
+
+    if text == BOOK_SEARCH_BUTTON:
+        if message.from_user:
+            user_search_modes[message.from_user.id] = "book"
+        await telegram_retry(
+            lambda: message.answer("Напиши название книги или автора.", reply_markup=main_reply_keyboard())
+        )
+        return
+
+    if text == AUTHOR_SEARCH_BUTTON:
+        if message.from_user:
+            user_search_modes[message.from_user.id] = "author"
+        await telegram_retry(lambda: message.answer("Напиши имя автора.", reply_markup=main_reply_keyboard()))
+        return
+
+    mode = user_search_modes.get(message.from_user.id if message.from_user else 0, "book")
+    if mode == "author":
+        await send_author_results(message, text)
+        return
+
     await send_search_results(message, text)
 
 
@@ -421,7 +445,7 @@ async def download_book(callback: CallbackQuery) -> None:
             )
             return
 
-        max_bytes = settings.max_download_mb * 1024 * 1024
+        max_bytes = min(settings.max_download_mb, settings.telegram_max_upload_mb) * 1024 * 1024
         log_user_action(
             callback.from_user,
             callback.message.chat.id,
@@ -445,6 +469,26 @@ async def download_book(callback: CallbackQuery) -> None:
         return
 
     size_mb = len(content) / 1024 / 1024
+    if size_mb > settings.telegram_max_upload_mb:
+        log_user_action(
+            callback.from_user,
+            callback.message.chat.id,
+            "telegram_upload_too_large",
+            book_id=book_id,
+            fmt=fmt,
+            filename=filename,
+            size_mb=f"{size_mb:.2f}",
+            telegram_max_upload_mb=settings.telegram_max_upload_mb,
+            duration=elapsed(started_at),
+        )
+        await telegram_retry(
+            lambda: callback.message.answer(
+                f"Файл {size_mb:.1f} МБ больше лимита отправки Telegram "
+                f"({settings.telegram_max_upload_mb} МБ)."
+            )
+        )
+        return
+
     log_user_action(
         callback.from_user,
         callback.message.chat.id,
@@ -479,7 +523,9 @@ async def download_book(callback: CallbackQuery) -> None:
             duration=elapsed(started_at),
         )
         await telegram_retry(
-            lambda: callback.message.answer("Не удалось отправить файл в Telegram через текущий proxy.")
+            lambda: callback.message.answer(
+                "Не удалось отправить файл в Telegram. Если файл большой, попробуй другой формат."
+            )
         )
         return
 
@@ -612,6 +658,9 @@ async def telegram_retry(
     for attempt in range(1, attempts + 1):
         try:
             return await call()
+        except TelegramEntityTooLarge:
+            logger.exception("Telegram rejected upload: request entity too large")
+            return None
         except TelegramNetworkError:
             if attempt == attempts:
                 logger.exception("Telegram request failed after %d attempts", attempts)
@@ -797,13 +846,14 @@ def _author_results_keyboard(session: AuthorSession):
 def log_startup_config() -> None:
     logger.info(
         "startup flibusta_base_url=%s request_timeout=%ss flibusta_retries=%s "
-        "flibusta_retry_delay=%ss flibusta_max_redirects=%s max_download_mb=%s",
+        "flibusta_retry_delay=%ss flibusta_max_redirects=%s max_download_mb=%s telegram_max_upload_mb=%s",
         settings.base_url,
         settings.request_timeout_seconds,
         settings.flibusta_retries,
         settings.flibusta_retry_delay_seconds,
         settings.flibusta_max_redirects,
         settings.max_download_mb,
+        settings.telegram_max_upload_mb,
     )
     logger.info(
         "startup telegram_timeout=%ss polling_retry_delay=%ss telegram_proxy=%s flibusta_proxy=%s",
@@ -877,6 +927,19 @@ def _formats_keyboard(details: BookDetails):
         keyboard.row(*format_row)
 
     return keyboard.as_markup()
+
+
+def main_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=BOOK_SEARCH_BUTTON),
+                KeyboardButton(text=AUTHOR_SEARCH_BUTTON),
+            ]
+        ],
+        resize_keyboard=True,
+        input_field_placeholder="Название книги или автор",
+    )
 
 
 async def main() -> None:
