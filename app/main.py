@@ -15,7 +15,15 @@ from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.enums import ChatAction, ParseMode
 from aiogram.exceptions import TelegramBadRequest, TelegramEntityTooLarge, TelegramNetworkError
 from aiogram.filters import Command, CommandObject
-from aiogram.types import BufferedInputFile, CallbackQuery, InlineKeyboardButton, KeyboardButton, Message, ReplyKeyboardMarkup
+from aiogram.types import (
+    BotCommand,
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+)
 from aiogram.types import User
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
@@ -34,6 +42,8 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 BOOK_SEARCH_BUTTON = "Поиск книги"
 AUTHOR_SEARCH_BUTTON = "Поиск автора"
+BOOK_MODE = "book"
+AUTHOR_MODE = "author"
 
 router = Router()
 
@@ -109,6 +119,32 @@ async def author_command(message: Message, command: CommandObject) -> None:
     await send_author_results(message, query)
 
 
+@router.message(Command("mode"))
+async def mode_command(message: Message, command: CommandObject) -> None:
+    mode = (command.args or "").strip().lower()
+    if mode in {"book", "books", "книга", "книги"}:
+        if message.from_user:
+            user_search_modes[message.from_user.id] = BOOK_MODE
+        await telegram_retry(lambda: message.answer("Режим: поиск книги.", reply_markup=main_reply_keyboard()))
+        return
+
+    if mode in {"author", "authors", "автор", "авторы"}:
+        if message.from_user:
+            user_search_modes[message.from_user.id] = AUTHOR_MODE
+        await telegram_retry(lambda: message.answer("Режим: поиск автора.", reply_markup=main_reply_keyboard()))
+        return
+
+    current_mode = user_search_modes.get(message.from_user.id if message.from_user else 0, BOOK_MODE)
+    current_text = "поиск автора" if current_mode == AUTHOR_MODE else "поиск книги"
+    await telegram_retry(
+        lambda: message.answer(
+            f"Сейчас: {current_text}.\n"
+            "Используй /mode book или /mode author.",
+            reply_markup=main_reply_keyboard(),
+        )
+    )
+
+
 @router.message(F.text)
 async def search_text(message: Message) -> None:
     text = (message.text or "").strip()
@@ -117,7 +153,7 @@ async def search_text(message: Message) -> None:
 
     if text == BOOK_SEARCH_BUTTON:
         if message.from_user:
-            user_search_modes[message.from_user.id] = "book"
+            user_search_modes[message.from_user.id] = BOOK_MODE
         await telegram_retry(
             lambda: message.answer("Напиши название книги или автора.", reply_markup=main_reply_keyboard())
         )
@@ -125,12 +161,12 @@ async def search_text(message: Message) -> None:
 
     if text == AUTHOR_SEARCH_BUTTON:
         if message.from_user:
-            user_search_modes[message.from_user.id] = "author"
+            user_search_modes[message.from_user.id] = AUTHOR_MODE
         await telegram_retry(lambda: message.answer("Напиши имя автора.", reply_markup=main_reply_keyboard()))
         return
 
-    mode = user_search_modes.get(message.from_user.id if message.from_user else 0, "book")
-    if mode == "author":
+    mode = user_search_modes.get(message.from_user.id if message.from_user else 0, BOOK_MODE)
+    if mode == AUTHOR_MODE:
         await send_author_results(message, text)
         return
 
@@ -942,6 +978,17 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+async def setup_bot_commands(bot: Bot) -> None:
+    await bot.set_my_commands(
+        [
+            BotCommand(command="search", description="поиск книг"),
+            BotCommand(command="author", description="поиск авторов"),
+            BotCommand(command="mode", description="переключить режим"),
+            BotCommand(command="start", description="показать кнопки"),
+        ]
+    )
+
+
 async def main() -> None:
     log_startup_config()
     session = AiohttpSession(
@@ -956,6 +1003,7 @@ async def main() -> None:
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     try:
+        await setup_bot_commands(bot)
         while True:
             try:
                 await dispatcher.start_polling(
