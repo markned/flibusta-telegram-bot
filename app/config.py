@@ -26,3 +26,11 @@ class Settings(BaseSettings):
     @property
     def base_url(self) -> str:
         return str(self.flibusta_base_url).rstrip("/")
+
+    @property
+    def normalized_http_proxy(self) -> str | None:
+        return self.http_proxy or None
+
+    @property
+    def normalized_telegram_proxy(self) -> str | None:
+        return self.telegram_proxy or None

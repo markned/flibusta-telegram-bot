@@ -82,7 +82,7 @@ user_search_modes: dict[int, str] = {}
 flibusta = FlibustaClient(
     settings.base_url,
     timeout=settings.request_timeout_seconds,
-    proxy=settings.http_proxy,
+    proxy=settings.normalized_http_proxy,
     retries=settings.flibusta_retries,
     retry_delay=settings.flibusta_retry_delay_seconds,
     max_redirects=settings.flibusta_max_redirects,
@@ -1211,7 +1211,7 @@ async def setup_bot_commands(bot: Bot) -> None:
 async def main() -> None:
     log_startup_config()
     session = AiohttpSession(
-        proxy=settings.telegram_proxy,
+        proxy=settings.normalized_telegram_proxy,
         timeout=settings.telegram_request_timeout_seconds,
     )
     bot = Bot(
