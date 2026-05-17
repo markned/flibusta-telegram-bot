@@ -431,6 +431,13 @@ def _extract_author_name(soup: BeautifulSoup, author_id: str) -> str:
 
 def _extract_author_refs(soup: BeautifulSoup, heading_author: str | None) -> list[AuthorResult]:
     if heading_author:
+        main = soup.select_one("#main") or soup.body or soup
+        for node in main.select('a[href^="/a/"], a[href^="a/"]'):
+            name = _clean_text(node.get_text(" ", strip=True))
+            href = node.get("href", "")
+            match = re.match(r"/?a/(\d+)", href)
+            if match and _normalize_name(name) == _normalize_name(heading_author):
+                return [AuthorResult(author_id=match.group(1), name=heading_author)]
         return [AuthorResult(author_id="", name=heading_author)]
 
     refs: list[AuthorResult] = []

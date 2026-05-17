@@ -10,6 +10,9 @@ dependencies = [
     "httpx[socks,http2]>=0.27,<1",
     "pydantic-settings>=2.2,<3",
     "lxml>=5.1,<6",
+    "aiosmtplib>=3.0,<4",
+    "aiosqlite>=0.20,<1",
+    "email-validator>=2.2,<3",
 ]
 
 [project.optional-dependencies]

@@ -32,7 +32,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import Settings
 from app.flibusta import AuthorResult, BookDetails, FlibustaClient, FlibustaError
+from app.handlers.kindle import build_kindle_router
 from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
+from app.repositories.db import Database
+from app.repositories.kindle_deliveries import KindleDeliveriesRepository
+from app.repositories.kindle_settings import KindleSettingsRepository
+from app.services.email_sender import EmailSender
+from app.services.kindle import KindleService
 
 settings = Settings()
 logging.basicConfig(
@@ -86,6 +92,26 @@ flibusta = FlibustaClient(
     retries=settings.flibusta_retries,
     retry_delay=settings.flibusta_retry_delay_seconds,
     max_redirects=settings.flibusta_max_redirects,
+)
+db = Database(settings.database_path)
+kindle_settings_repo = KindleSettingsRepository(db)
+kindle_deliveries_repo = KindleDeliveriesRepository(db)
+email_sender = EmailSender(
+    host=settings.smtp_host,
+    port=settings.smtp_port,
+    username=settings.smtp_username,
+    password=settings.smtp_password,
+    from_email=settings.smtp_from_email,
+    starttls=settings.smtp_starttls,
+)
+kindle_service = KindleService(
+    flibusta=flibusta,
+    settings_repo=kindle_settings_repo,
+    deliveries_repo=kindle_deliveries_repo,
+    email_sender=email_sender,
+    max_attachment_bytes=settings.kindle_max_attachment_mb * 1024 * 1024,
+    default_format=settings.kindle_default_format,
+    send_rate_limit_per_hour=settings.kindle_send_rate_limit_per_hour,
 )
 
 
@@ -1030,6 +1056,13 @@ def log_startup_config() -> None:
         safe_proxy_info(settings.telegram_proxy),
         safe_proxy_info(settings.http_proxy),
     )
+    logger.info(
+        "startup smtp_provider=%s smtp_host=%s smtp_port=%s smtp_from=%s",
+        settings.smtp_provider,
+        settings.smtp_host or "disabled",
+        settings.smtp_port,
+        _mask_sender(settings.smtp_from_email),
+    )
 
 
 def safe_proxy_info(proxy: str | None) -> str:
@@ -1042,6 +1075,13 @@ def safe_proxy_info(proxy: str | None) -> str:
     if parsed.port is None:
         return f"enabled scheme={scheme} host={host}"
     return f"enabled scheme={scheme} host={host} port={parsed.port}"
+
+
+def _mask_sender(value: str | None) -> str:
+    if not value or "@" not in value:
+        return "disabled"
+    local, domain = value.split("@", 1)
+    return f"{local[:1]}***@{domain}"
 
 
 def _book_text(details: BookDetails) -> str:
@@ -1095,6 +1135,7 @@ def _formats_keyboard(details: BookDetails, preferred_format: str | None = None)
 
     if format_row:
         keyboard.row(*format_row)
+    keyboard.row(InlineKeyboardButton(text="📤 Send to Kindle", callback_data=f"kindle:{details.book_id}"))
 
     return keyboard.as_markup()
 
@@ -1203,6 +1244,10 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="search", description="поиск книг"),
             BotCommand(command="author", description="поиск авторов"),
             BotCommand(command="mode", description="переключить режим"),
+            BotCommand(command="kindle_email", description="сохранить Kindle e-mail"),
+            BotCommand(command="kindle_help", description="настройка Send to Kindle"),
+            BotCommand(command="kindle_status", description="статус Kindle"),
+            BotCommand(command="kindle_remove", description="удалить Kindle e-mail"),
             BotCommand(command="start", description="открыть меню"),
         ]
     )
@@ -1210,6 +1255,7 @@ async def setup_bot_commands(bot: Bot) -> None:
 
 async def main() -> None:
     log_startup_config()
+    await db.initialize()
     session = AiohttpSession(
         proxy=settings.normalized_telegram_proxy,
         timeout=settings.telegram_request_timeout_seconds,
@@ -1221,6 +1267,14 @@ async def main() -> None:
     )
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
+    dispatcher.include_router(
+        build_kindle_router(
+            settings_repo=kindle_settings_repo,
+            kindle_service=kindle_service,
+            smtp_from_email=settings.smtp_from_email,
+            default_format=settings.kindle_default_format,
+        )
+    )
     try:
         await setup_bot_commands(bot)
         while True:

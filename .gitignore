@@ -3,4 +3,5 @@
 __pycache__/
 *.pyc
 user_prefs.json
+bot.db
 .pytest_cache/

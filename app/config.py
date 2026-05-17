@@ -22,6 +22,17 @@ class Settings(BaseSettings):
     max_download_mb: int = Field(default=45, alias="MAX_DOWNLOAD_MB")
     telegram_max_upload_mb: int = Field(default=50, alias="TELEGRAM_MAX_UPLOAD_MB")
     search_results_limit: int = Field(default=40, alias="SEARCH_RESULTS_LIMIT")
+    smtp_provider: str = Field(default="amazon_ses", alias="SMTP_PROVIDER")
+    smtp_host: str | None = Field(default=None, alias="SMTP_HOST")
+    smtp_port: int = Field(default=587, alias="SMTP_PORT")
+    smtp_username: str | None = Field(default=None, alias="SMTP_USERNAME")
+    smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD")
+    smtp_from_email: str | None = Field(default=None, alias="SMTP_FROM_EMAIL")
+    smtp_starttls: bool = Field(default=True, alias="SMTP_STARTTLS")
+    kindle_max_attachment_mb: int = Field(default=28, alias="KINDLE_MAX_ATTACHMENT_MB")
+    kindle_default_format: str = Field(default="epub", alias="KINDLE_DEFAULT_FORMAT")
+    kindle_send_rate_limit_per_hour: int = Field(default=5, alias="KINDLE_SEND_RATE_LIMIT_PER_HOUR")
+    database_path: str = Field(default="bot.db", alias="DATABASE_PATH")
 
     @property
     def base_url(self) -> str:
