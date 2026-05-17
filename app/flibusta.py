@@ -95,16 +95,35 @@ class FlibustaClient:
         if not query:
             return []
 
-        url = f"{self.base_url}/booksearch?ask={quote_plus(query)}"
+        url = f"{self.base_url}/booksearch?ask={quote_plus(query)}&chb=on"
         response = await self._get(url)
         return parse_search_results(response.text, limit=limit)
+
+    async def search_all(
+        self,
+        query: str,
+        book_limit: int = 8,
+        author_limit: int = 20,
+    ) -> tuple[list[SearchResult], list[AuthorResult]]:
+        query = query.strip()
+        if not query:
+            return [], []
+
+        book_url = f"{self.base_url}/booksearch?ask={quote_plus(query)}&chb=on"
+        author_url = f"{self.base_url}/booksearch?ask={quote_plus(query)}&cha=on"
+        book_response = await self._get(book_url)
+        author_response = await self._get(author_url)
+        return (
+            parse_search_results(book_response.text, limit=book_limit),
+            parse_author_results(author_response.text, limit=author_limit),
+        )
 
     async def search_authors(self, query: str, limit: int = 20) -> list[AuthorResult]:
         query = query.strip()
         if not query:
             return []
 
-        url = f"{self.base_url}/booksearch?ask={quote_plus(query)}"
+        url = f"{self.base_url}/booksearch?ask={quote_plus(query)}&cha=on"
         response = await self._get(url)
         return parse_author_results(response.text, limit=limit)
 
@@ -278,10 +297,11 @@ class FlibustaClient:
 
 def parse_search_results(markup: str, limit: int = 8) -> list[SearchResult]:
     soup = BeautifulSoup(markup, "lxml")
+    scope = soup.select_one("#main") or soup
     results: list[SearchResult] = []
     seen: set[str] = set()
 
-    for link in soup.select('a[href^="/b/"], a[href^="b/"]'):
+    for link in scope.select('a[href^="/b/"], a[href^="b/"]'):
         href = link.get("href", "")
         match = re.search(r"/?b/(\d+)$", href)
         if not match:
@@ -306,10 +326,11 @@ def parse_search_results(markup: str, limit: int = 8) -> list[SearchResult]:
 
 def parse_author_results(markup: str, limit: int = 20) -> list[AuthorResult]:
     soup = BeautifulSoup(markup, "lxml")
+    scope = soup.select_one("#main") or soup
     results: list[AuthorResult] = []
     seen: set[str] = set()
 
-    for link in soup.select('a[href^="/a/"], a[href^="a/"]'):
+    for link in scope.select('a[href^="/a/"], a[href^="a/"]'):
         href = link.get("href", "")
         match = re.search(r"/?a/(\d+)$", href)
         if not match:

@@ -1,0 +1,32 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: Oracle
+    steps:
+      - name: Pull and restart bot on VPS
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd '${{ secrets.VPS_DEPLOY_PATH }}'
+            git fetch origin
+            git reset --hard origin/main
+            .venv/bin/pip install -r requirements.txt
+            export SYSTEMD_PAGER=cat
+            sudo -n /usr/bin/systemctl restart flibusta-tg-bot
+            sudo -n /usr/bin/systemctl status flibusta-tg-bot

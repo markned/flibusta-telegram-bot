@@ -1,12 +1,6 @@
 .env
 .venv/
 __pycache__/
-.pycache/
+*.pyc
+user_prefs.json
 .pytest_cache/
-*.py[cod]
-
-.DS_Store
-
-dist/
-build/
-*.egg-info/

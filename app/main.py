@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import logging
+import json
+import re
 from asyncio import sleep
 from dataclasses import dataclass
 from html import escape
+from pathlib import Path
 from time import monotonic
 from typing import Awaitable, Callable, TypeVar
 from urllib.parse import urlparse
@@ -40,10 +43,13 @@ if settings.log_level.upper() != "DEBUG":
     logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
-BOOK_SEARCH_BUTTON = "Поиск книги"
-AUTHOR_SEARCH_BUTTON = "Поиск автора"
+BOOK_SEARCH_BUTTON = "📚 Поиск книги"
+AUTHOR_SEARCH_BUTTON = "👤 Поиск автора"
+HELP_BUTTON = "ℹ️ Как пользоваться"
 BOOK_MODE = "book"
 AUTHOR_MODE = "author"
+SMART_MODE = "smart"
+PREFS_PATH = Path("user_prefs.json")
 
 router = Router()
 
@@ -86,10 +92,15 @@ flibusta = FlibustaClient(
 @router.message(Command("start"))
 async def start(message: Message) -> None:
     log_user_action(message.from_user, message.chat.id, "start")
+    if message.from_user:
+        user_search_modes[message.from_user.id] = SMART_MODE
     await telegram_retry(
         lambda: message.answer(
-            "Отправь название книги или автора. Еще можно использовать /search &lt;запрос&gt; "
-            "или /author &lt;автор&gt;.",
+            "Что ищем?\n\n"
+            "Можно просто написать запрос — я сам попробую понять, это книга или автор.\n"
+            "Если хочешь явно выбрать режим, нажми <b>📚 Поиск книги</b> или "
+            "<b>👤 Поиск автора</b>.\n\n"
+            "Кнопки снизу всегда доступны.",
             reply_markup=main_reply_keyboard(),
         )
     )
@@ -155,7 +166,7 @@ async def search_text(message: Message) -> None:
         if message.from_user:
             user_search_modes[message.from_user.id] = BOOK_MODE
         await telegram_retry(
-            lambda: message.answer("Напиши название книги или автора.", reply_markup=main_reply_keyboard())
+            lambda: message.answer("Напиши название книги.", reply_markup=main_reply_keyboard())
         )
         return
 
@@ -165,9 +176,24 @@ async def search_text(message: Message) -> None:
         await telegram_retry(lambda: message.answer("Напиши имя автора.", reply_markup=main_reply_keyboard()))
         return
 
-    mode = user_search_modes.get(message.from_user.id if message.from_user else 0, BOOK_MODE)
+    if text == HELP_BUTTON:
+        await telegram_retry(
+            lambda: message.answer(
+                "1. Выбери, что ищешь: книгу или автора.\n"
+                "2. Или просто напиши запрос — я попробую понять сам.\n"
+                "3. Открой карточку и выбери формат для скачивания.\n\n"
+                "Команды тоже работают: /search и /author.",
+                reply_markup=main_reply_keyboard(),
+            )
+        )
+        return
+
+    mode = user_search_modes.get(message.from_user.id if message.from_user else 0, SMART_MODE)
     if mode == AUTHOR_MODE:
         await send_author_results(message, text)
+        return
+    if mode == SMART_MODE:
+        await send_smart_results(message, text)
         return
 
     await send_search_results(message, text)
@@ -204,7 +230,10 @@ async def show_book(callback: CallbackQuery) -> None:
         duration=elapsed(started_at),
     )
     await telegram_retry(
-        lambda: callback.message.answer(_book_text(details), reply_markup=_formats_keyboard(details))
+        lambda: callback.message.answer(
+            _book_text(details),
+            reply_markup=_formats_keyboard(details, preferred_format=_preferred_format(callback.from_user.id)),
+        )
     )
 
 
@@ -575,6 +604,7 @@ async def download_book(callback: CallbackQuery) -> None:
         size_mb=f"{size_mb:.2f}",
         duration=elapsed(started_at),
     )
+    _remember_preferred_format(callback.from_user.id, fmt)
 
 
 async def send_search_results(message: Message, query: str) -> None:
@@ -589,7 +619,10 @@ async def send_search_results(message: Message, query: str) -> None:
         logger.warning("Could not send typing action")
 
     try:
-        results = await flibusta.search(query, limit=settings.search_results_limit)
+        results = _rank_and_dedupe_books(
+            await flibusta.search(_clean_query(query), limit=settings.search_results_limit),
+            query,
+        )
     except FlibustaError as exc:
         log_user_action(
             message.from_user,
@@ -644,7 +677,10 @@ async def send_author_results(message: Message, query: str) -> None:
         logger.warning("Could not send typing action")
 
     try:
-        authors = await flibusta.search_authors(query, limit=settings.search_results_limit)
+        authors = _rank_authors(
+            await flibusta.search_authors(_clean_query(query), limit=settings.search_results_limit),
+            query,
+        )
     except FlibustaError as exc:
         log_user_action(
             message.from_user,
@@ -684,6 +720,102 @@ async def send_author_results(message: Message, query: str) -> None:
             reply_markup=_author_results_keyboard(session),
         )
     )
+
+
+async def send_smart_results(message: Message, query: str) -> None:
+    started_at = monotonic()
+    cleaned = _clean_query(query)
+    log_user_action(message.from_user, message.chat.id, "smart_search_start", query=query)
+    try:
+        await telegram_retry(
+            lambda: message.bot.send_chat_action(message.chat.id, ChatAction.TYPING),
+            attempts=2,
+        )
+        used_query = cleaned
+        raw_books, raw_authors = await flibusta.search_all(
+            cleaned,
+            book_limit=settings.search_results_limit,
+            author_limit=settings.search_results_limit,
+        )
+        if not raw_books and not raw_authors:
+            for fallback_query in _fallback_queries(cleaned):
+                raw_books, raw_authors = await flibusta.search_all(
+                    fallback_query,
+                    book_limit=settings.search_results_limit,
+                    author_limit=settings.search_results_limit,
+                )
+                if raw_books or raw_authors:
+                    used_query = fallback_query
+                    break
+    except FlibustaError as exc:
+        log_user_action(
+            message.from_user,
+            message.chat.id,
+            "smart_search_failed",
+            query=query,
+            error=str(exc),
+            duration=elapsed(started_at),
+        )
+        await telegram_retry(lambda: message.answer(str(exc)))
+        return
+
+    books = _rank_and_dedupe_books(raw_books, query)
+    authors = _rank_authors(raw_authors, query)
+    top_author_is_exact = bool(authors and _norm(authors[0].name) == _norm(query))
+    top_book_is_exact = bool(books and _norm(_base_title(books[0].title)) == _norm(query))
+
+    if top_author_is_exact and not top_book_is_exact:
+        session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
+        log_user_action(
+            message.from_user,
+            message.chat.id,
+            "smart_search_author_guess",
+            query=query,
+            authors=len(authors),
+            books=len(books),
+            duration=elapsed(started_at),
+        )
+        await telegram_retry(
+            lambda: message.answer(
+                f"Похоже, это автор. Нашёл по запросу: <b>{escape(used_query)}</b>",
+                reply_markup=_author_results_keyboard(session),
+            )
+        )
+        return
+
+    if books:
+        title = None
+        if used_query != cleaned:
+            title = f"Точного совпадения не нашёл. Ближайшее по запросу: <b>{escape(used_query)}</b>"
+        session = _create_search_session(message.from_user.id, message.chat.id, used_query, books, title=title)
+        log_user_action(
+            message.from_user,
+            message.chat.id,
+            "smart_search_books",
+            query=query,
+            books=len(books),
+            authors=len(authors),
+            duration=elapsed(started_at),
+        )
+        await telegram_retry(
+            lambda: message.answer(
+                _search_results_text(session),
+                reply_markup=_search_results_keyboard(session),
+            )
+        )
+        return
+
+    if authors:
+        session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
+        await telegram_retry(
+            lambda: message.answer(
+                f"Книг не нашёл, но нашёл авторов по запросу: <b>{escape(used_query)}</b>",
+                reply_markup=_author_results_keyboard(session),
+            )
+        )
+        return
+
+    await telegram_retry(lambda: message.answer("Ничего не найдено."))
 
 
 async def telegram_retry(
@@ -938,7 +1070,7 @@ def _book_text(details: BookDetails) -> str:
     return "\n\n".join(parts)
 
 
-def _formats_keyboard(details: BookDetails):
+def _formats_keyboard(details: BookDetails, preferred_format: str | None = None):
     author_buttons = [item for item in details.author_refs[:3] if item.author_id]
     if not details.formats and not author_buttons:
         return None
@@ -953,8 +1085,10 @@ def _formats_keyboard(details: BookDetails):
         )
 
     format_row: list[InlineKeyboardButton] = []
-    for item in details.formats:
-        format_row.append(InlineKeyboardButton(text=item.label, callback_data=f"dl:{details.book_id}:{item.code}"))
+    formats = sorted(details.formats, key=lambda item: item.code != preferred_format)
+    for item in formats:
+        label = f"⭐ {item.label}" if item.code == preferred_format else item.label
+        format_row.append(InlineKeyboardButton(text=label, callback_data=f"dl:{details.book_id}:{item.code}"))
         if len(format_row) == 3:
             keyboard.row(*format_row)
             format_row = []
@@ -971,11 +1105,96 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
             [
                 KeyboardButton(text=BOOK_SEARCH_BUTTON),
                 KeyboardButton(text=AUTHOR_SEARCH_BUTTON),
-            ]
+            ],
+            [KeyboardButton(text=HELP_BUTTON)],
         ],
         resize_keyboard=True,
+        is_persistent=True,
         input_field_placeholder="Название книги или автор",
     )
+
+
+def _load_prefs() -> dict[str, dict[str, str]]:
+    if not PREFS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(PREFS_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_prefs(data: dict[str, dict[str, str]]) -> None:
+    PREFS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _preferred_format(user_id: int | None) -> str | None:
+    if user_id is None:
+        return None
+    return _load_prefs().get(str(user_id), {}).get("preferred_format")
+
+
+def _remember_preferred_format(user_id: int | None, fmt: str) -> None:
+    if user_id is None:
+        return
+    data = _load_prefs()
+    data[str(user_id)] = {"preferred_format": fmt}
+    _save_prefs(data)
+
+
+def _clean_query(query: str) -> str:
+    cleaned = query.replace("ё", "е").replace("Ё", "Е")
+    cleaned = re.sub(r"[«»\"“”„]+", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _norm(text: str) -> str:
+    text = _clean_query(text).lower()
+    text = re.sub(r"\[[^\]]+\]|\([^)]*\)", "", text)
+    text = re.sub(r"[^a-zа-я0-9]+", " ", text, flags=re.I)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _base_title(title: str) -> str:
+    return re.sub(r"\s*(\[[^\]]+\]|\([^)]*\))", "", title).strip()
+
+
+def _rank_and_dedupe_books(results: list, query: str) -> list:
+    q = _norm(query)
+    deduped = {}
+    for item in results:
+        key = (_norm(_base_title(item.title)), _norm(item.author or ""))
+        current = deduped.get(key)
+        if current is None or _book_score(item, q) > _book_score(current, q):
+            deduped[key] = item
+    return sorted(deduped.values(), key=lambda item: _book_score(item, q), reverse=True)
+
+
+def _book_score(item, q: str) -> tuple[int, int, int]:
+    title = _norm(_base_title(item.title))
+    full = _norm(item.title)
+    return (
+        int(title == q),
+        int(title.startswith(q)),
+        int(q in full),
+    )
+
+
+def _rank_authors(authors: list[AuthorResult], query: str) -> list[AuthorResult]:
+    q = _norm(query)
+    return sorted(authors, key=lambda item: (_norm(item.name) == q, q in _norm(item.name)), reverse=True)
+
+
+def _fallback_queries(query: str) -> list[str]:
+    words = [word for word in re.split(r"\s+", query) if word]
+    candidates = []
+    for size in (4, 3, 2, 1):
+        if len(words) >= size:
+            candidate = " ".join(words[:size])
+            if candidate != query and candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
 
 
 async def setup_bot_commands(bot: Bot) -> None:
@@ -984,7 +1203,7 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="search", description="поиск книг"),
             BotCommand(command="author", description="поиск авторов"),
             BotCommand(command="mode", description="переключить режим"),
-            BotCommand(command="start", description="показать кнопки"),
+            BotCommand(command="start", description="открыть меню"),
         ]
     )
 
