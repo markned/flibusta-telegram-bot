@@ -6,12 +6,15 @@ from html import escape
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, InlineKeyboardButton, BufferedInputFile
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiosmtplib.errors import SMTPAuthenticationError, SMTPRecipientsRefused, SMTPResponseException
 
 from app.repositories.db import Database
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository, KindleDelivery
 from app.repositories.kindle_settings import KindleSettingsRepository
+from app.repositories.user_preferences import UserPreferencesRepository
+from app.messages.kindle import kindle_setup_text, kindle_missing_email_text
 from app.services.email_sender import EmailConfigurationError
 from app.services.kindle import (
     KindleConversionNotAvailableError,
@@ -23,6 +26,7 @@ from app.services.kindle import (
     validate_kindle_email,
 )
 from app.services.kindle_queue import KindleQueue
+from app.services.smtp_errors import classify_smtp_error, smtp_user_message
 
 logger = logging.getLogger(__name__)
 ALLOWED_KINDLE_FORMATS = {"epub", "fb2", "txt", "pdf"}
@@ -33,6 +37,7 @@ def build_kindle_router(
     db: Database,
     settings_repo: KindleSettingsRepository,
     deliveries_repo: KindleDeliveriesRepository,
+    preferences_repo: UserPreferencesRepository,
     kindle_queue: KindleQueue,
     smtp_from_email: str | None,
     smtp_host: str | None,
@@ -41,6 +46,8 @@ def build_kindle_router(
     default_format: str,
     max_attachment_mb: int,
     admin_user_ids: set[int],
+    retention_days: int,
+    export_include_full_emails: bool,
 ) -> Router:
     router = Router()
 
@@ -58,6 +65,7 @@ def build_kindle_router(
         current = await settings_repo.get(message.from_user.id)
         preferred = current.preferred_kindle_format if current else default_format
         await settings_repo.upsert(message.from_user.id, normalized, preferred_format=preferred)
+        await preferences_repo.upsert(message.from_user.id, kindle_format=preferred)
         await message.answer(f"Kindle e-mail saved: {mask_email(normalized)}")
 
     @router.message(Command("kindle_help"))
@@ -71,6 +79,9 @@ def build_kindle_router(
             "4. Use the «📤 Send to Kindle» button in a book card.\n\n"
             f"The sender address Amazon must approve is: <code>{escape(sender)}</code>."
         )
+    @router.message(Command("kindle_setup"))
+    async def kindle_setup(message: Message) -> None:
+        await message.answer(kindle_setup_text(smtp_from_email))
 
     @router.message(Command("kindle_status"))
     async def kindle_status(message: Message) -> None:
@@ -115,6 +126,7 @@ def build_kindle_router(
             )
             return
         await settings_repo.update_preferred_format(message.from_user.id, raw)
+        await preferences_repo.upsert(message.from_user.id, kindle_format=raw)
         await message.answer(f"Preferred Kindle format saved: {escape(raw)}. EPUB is recommended.")
 
     @router.message(Command("kindle_history"))
@@ -124,6 +136,17 @@ def build_kindle_router(
             await message.answer("No Kindle deliveries yet.")
             return
         await message.answer(format_history(items))
+    @router.message(Command("kindle_retry"))
+    async def kindle_retry(message: Message, command: CommandObject) -> None:
+        arg=(command.args or '').strip()
+        old=await (deliveries_repo.get_by_id(int(arg)) if arg.isdigit() else deliveries_repo.get_latest_failed_for_user(message.from_user.id))
+        if old is None or old.user_id != message.from_user.id:
+            await message.answer("No failed Kindle delivery found to retry."); return
+        if old.status != 'failed':
+            await message.answer("Only failed deliveries can be retried."); return
+        status=await message.answer("Queued for Kindle…")
+        try: await kindle_queue.enqueue(user_id=old.user_id,chat_id=message.chat.id,book_id=old.book_id,status_message_id=status.message_id,retry_of_delivery_id=old.id)
+        except Exception as exc: await status.edit_text(user_message_for_exception(exc))
 
     @router.message(Command("admin_kindle_health"))
     async def admin_kindle_health(message: Message) -> None:
@@ -144,6 +167,31 @@ def build_kindle_router(
             f"Active jobs: {kindle_queue.active_jobs}\n"
             f"Recent failures (24h): {failures}"
         )
+    @router.message(Command("admin_kindle_failures"))
+    async def admin_kindle_failures(message: Message)->None:
+        if message.from_user.id not in admin_user_ids:return
+        items=await deliveries_repo.get_recent_failures()
+        if not items: await message.answer("No recent Kindle failures."); return
+        await message.answer("\\n".join(f"{d.id} user={d.user_id} {d.title or d.book_id} [{d.format or '?'}] failed category={(d.last_error or d.error or 'unknown').split(':',1)[0]} {d.created_at[:16]}" for d in items))
+    @router.message(Command("admin_kindle_delivery"))
+    async def admin_kindle_delivery(message:Message, command:CommandObject)->None:
+        if message.from_user.id not in admin_user_ids:return
+        arg=(command.args or '').strip(); d=await deliveries_repo.get_by_id(int(arg)) if arg.isdigit() else None
+        if not d: await message.answer("Delivery not found."); return
+        await message.answer(f"id={d.id}\\nuser_id={d.user_id}\\nbook_id={d.book_id}\\ntitle={d.title}\\nformat={d.format}\\nfilename={d.filename}\\nsize={d.file_size_bytes}\\nstatus={d.status}\\nattempts={d.attempts}\\ncreated_at={d.created_at}\\nupdated_at={d.updated_at}\\nlast_error={_short_error(d.last_error or d.error or '')}")
+    @router.message(Command("admin_cleanup_deliveries"))
+    async def admin_cleanup(message:Message)->None:
+        if message.from_user.id not in admin_user_ids:return
+        count=await deliveries_repo.cleanup_completed(retention_days); await message.answer(f"Deleted {count} old delivery records.")
+    @router.message(Command("admin_export_settings"))
+    async def admin_export(message:Message)->None:
+        if message.from_user.id not in admin_user_ids:return
+        rows=await preferences_repo.all_rows(); out=[]
+        for r in rows:
+            ks=await settings_repo.get(r['user_id']); deliveries=await deliveries_repo.get_recent_for_user(r['user_id'],limit=100000)
+            out.append({'user_id':r['user_id'],'kindle_email':(ks.kindle_email if ks and export_include_full_emails else mask_email(ks.kindle_email if ks else None)),'preferred_download_format':r['preferred_download_format'],'preferred_kindle_format':r['preferred_kindle_format'],'created_at':r['created_at'],'updated_at':r['updated_at'],'delivery_count':len(deliveries)})
+        import json
+        await message.answer_document(BufferedInputFile(json.dumps(out,ensure_ascii=False,indent=2).encode(),'settings.json'))
 
     @router.callback_query(F.data.startswith("kindle:"))
     async def send_to_kindle(callback: CallbackQuery) -> None:
@@ -151,10 +199,8 @@ def build_kindle_router(
         settings = await settings_repo.get(callback.from_user.id)
         if settings is None:
             await callback.answer()
-            await callback.message.answer(
-                "Kindle e-mail is not configured yet. Use "
-                "<code>/kindle_email your_name@kindle.com</code>."
-            )
+            kb=InlineKeyboardBuilder(); kb.row(InlineKeyboardButton(text="How to set up Kindle",callback_data="kindle_setup_help"),InlineKeyboardButton(text="Show sender e-mail",callback_data="kindle_sender"))
+            await callback.message.answer(kindle_missing_email_text(),reply_markup=kb.as_markup())
             return
         await callback.answer("Added to Kindle queue")
         status = await callback.message.answer("Queued for Kindle…")
@@ -169,6 +215,10 @@ def build_kindle_router(
             logger.exception("Failed to enqueue Kindle job")
             await status.edit_text(user_message_for_exception(exc))
 
+    @router.callback_query(F.data=="kindle_setup_help")
+    async def setup_help_cb(callback:CallbackQuery): await callback.answer(); await callback.message.answer(kindle_setup_text(smtp_from_email))
+    @router.callback_query(F.data=="kindle_sender")
+    async def sender_cb(callback:CallbackQuery): await callback.answer(); await callback.message.answer(smtp_from_email or "Kindle sending is not configured by the bot owner yet.")
     return router
 
 
@@ -179,22 +229,10 @@ def user_message_for_exception(exc: Exception) -> str:
         return "This file is too large to send to Kindle by e-mail. Try another format."
     if isinstance(exc, KindleRateLimitError):
         return "You reached the Kindle sending limit for this hour. Try again later."
-    if isinstance(exc, (SMTPAuthenticationError, EmailConfigurationError)):
-        return "Kindle sending is temporarily unavailable. I already logged the technical error."
     if isinstance(exc, KindleConversionNotAvailableError):
         return "This format is not ready for Kindle delivery yet. Try another format."
-    if isinstance(exc, SMTPRecipientsRefused):
-        return (
-            "Delivery failed. Check your Kindle e-mail and make sure the bot sender address "
-            "is approved in Amazon."
-        )
-    if isinstance(exc, SMTPResponseException):
-        if exc.code in {552, 554}:
-            return "This file is too large to send to Kindle by e-mail. Try another format."
-        return (
-            "Delivery failed. Check your Kindle e-mail and make sure the bot sender address "
-            "is approved in Amazon."
-        )
+    if isinstance(exc,(SMTPAuthenticationError,EmailConfigurationError,SMTPRecipientsRefused,SMTPResponseException)):
+        return smtp_user_message(classify_smtp_error(exc))
     return "Failed to send this book to Kindle. Try again later."
 
 

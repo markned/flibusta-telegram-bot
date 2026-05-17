@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import json
 import re
 from asyncio import sleep
 from dataclasses import dataclass
@@ -37,6 +36,7 @@ from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
 from app.repositories.db import Database
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository
 from app.repositories.kindle_settings import KindleSettingsRepository
+from app.repositories.user_preferences import UserPreferencesRepository
 from app.services.email_sender import EmailSender
 from app.services.conversion import ConversionService
 from app.services.kindle import KindleService
@@ -57,7 +57,6 @@ HELP_BUTTON = "ℹ️ Как пользоваться"
 BOOK_MODE = "book"
 AUTHOR_MODE = "author"
 SMART_MODE = "smart"
-PREFS_PATH = Path("user_prefs.json")
 
 router = Router()
 
@@ -98,6 +97,7 @@ flibusta = FlibustaClient(
 db = Database(settings.database_path)
 kindle_settings_repo = KindleSettingsRepository(db)
 kindle_deliveries_repo = KindleDeliveriesRepository(db)
+user_preferences_repo = UserPreferencesRepository(db)
 email_sender = EmailSender(
     host=settings.smtp_host,
     port=settings.smtp_port,
@@ -123,6 +123,8 @@ kindle_queue = KindleQueue(
     worker_concurrency=settings.kindle_worker_concurrency,
     user_concurrency=settings.kindle_user_concurrency,
     error_message_for_exception=user_message_for_exception,
+    max_attempts=settings.kindle_max_job_attempts,
+    retry_base_delay_seconds=settings.kindle_retry_base_delay_seconds,
 )
 
 
@@ -266,10 +268,11 @@ async def show_book(callback: CallbackQuery) -> None:
         formats=",".join(item.code for item in details.formats) or "none",
         duration=elapsed(started_at),
     )
+    preferred_format = await _preferred_format(callback.from_user.id)
     await telegram_retry(
         lambda: callback.message.answer(
             _book_text(details),
-            reply_markup=_formats_keyboard(details, preferred_format=_preferred_format(callback.from_user.id)),
+            reply_markup=_formats_keyboard(details, preferred_format=preferred_format),
         )
     )
 
@@ -641,7 +644,7 @@ async def download_book(callback: CallbackQuery) -> None:
         size_mb=f"{size_mb:.2f}",
         duration=elapsed(started_at),
     )
-    _remember_preferred_format(callback.from_user.id, fmt)
+    await _remember_preferred_format(callback.from_user.id, fmt)
 
 
 async def send_search_results(message: Message, query: str) -> None:
@@ -1074,6 +1077,7 @@ def log_startup_config() -> None:
         settings.smtp_port,
         _mask_sender(settings.smtp_from_email),
     )
+    logger.info("startup database_path=%s search_limit=%s kindle_enabled=%s kindle_queue=%s/%s attachment_mb=%s",settings.database_path,settings.search_results_limit,'yes' if _smtp_config_present() else 'no',settings.kindle_worker_concurrency,settings.kindle_user_concurrency,settings.kindle_max_attachment_mb)
 
 
 def safe_proxy_info(proxy: str | None) -> str:
@@ -1154,7 +1158,9 @@ def _formats_keyboard(details: BookDetails, preferred_format: str | None = None)
 
     if format_row:
         keyboard.row(*format_row)
-    keyboard.row(InlineKeyboardButton(text="📤 Send to Kindle", callback_data=f"kindle:{details.book_id}"))
+    kindle_code=next((c for c in [preferred_format,'epub','fb2','txt','mobi','pdf'] if c and any(f.code==c for f in details.formats)),None)
+    if kindle_code:
+        keyboard.row(InlineKeyboardButton(text=f"📤 Send {kindle_code.upper()} to Kindle", callback_data=f"kindle:{details.book_id}"))
 
     return keyboard.as_markup()
 
@@ -1174,32 +1180,17 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def _load_prefs() -> dict[str, dict[str, str]]:
-    if not PREFS_PATH.exists():
-        return {}
-    try:
-        data = json.loads(PREFS_PATH.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _save_prefs(data: dict[str, dict[str, str]]) -> None:
-    PREFS_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def _preferred_format(user_id: int | None) -> str | None:
+async def _preferred_format(user_id: int | None) -> str | None:
     if user_id is None:
         return None
-    return _load_prefs().get(str(user_id), {}).get("preferred_format")
+    pref=await user_preferences_repo.get(user_id)
+    return pref.preferred_download_format if pref else None
 
 
-def _remember_preferred_format(user_id: int | None, fmt: str) -> None:
+async def _remember_preferred_format(user_id: int | None, fmt: str) -> None:
     if user_id is None:
         return
-    data = _load_prefs()
-    data[str(user_id)] = {"preferred_format": fmt}
-    _save_prefs(data)
+    await user_preferences_repo.upsert(user_id, download_format=fmt)
 
 
 def _clean_query(query: str) -> str:
@@ -1265,10 +1256,12 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="mode", description="переключить режим"),
             BotCommand(command="kindle_email", description="сохранить Kindle e-mail"),
             BotCommand(command="kindle_help", description="настройка Send to Kindle"),
+            BotCommand(command="kindle_setup", description="настройка Kindle"),
             BotCommand(command="kindle_status", description="статус Kindle"),
             BotCommand(command="kindle_remove", description="удалить Kindle e-mail"),
             BotCommand(command="kindle_history", description="история Kindle"),
             BotCommand(command="kindle_format", description="формат Kindle"),
+            BotCommand(command="kindle_retry", description="повторить Kindle"),
             BotCommand(command="start", description="открыть меню"),
         ]
     )
@@ -1277,6 +1270,9 @@ async def setup_bot_commands(bot: Bot) -> None:
 async def main() -> None:
     log_startup_config()
     await db.initialize()
+    imported = await user_preferences_repo.import_json_once(Path("user_prefs.json"))
+    if imported:
+        logger.info("imported legacy user preferences count=%s", imported)
     interrupted = await kindle_deliveries_repo.mark_interrupted_inflight_failed()
     if interrupted:
         logger.warning("Marked interrupted Kindle deliveries as failed: count=%s", interrupted)
@@ -1296,6 +1292,7 @@ async def main() -> None:
             db=db,
             settings_repo=kindle_settings_repo,
             deliveries_repo=kindle_deliveries_repo,
+            preferences_repo=user_preferences_repo,
             kindle_queue=kindle_queue,
             smtp_from_email=settings.smtp_from_email,
             smtp_host=settings.smtp_host,
@@ -1304,6 +1301,8 @@ async def main() -> None:
             default_format=settings.kindle_default_format,
             max_attachment_mb=settings.kindle_max_attachment_mb,
             admin_user_ids=settings.admin_ids,
+            retention_days=settings.kindle_delivery_log_retention_days,
+            export_include_full_emails=settings.admin_export_include_full_emails,
         )
     )
     try:

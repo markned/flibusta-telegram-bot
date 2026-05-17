@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     kindle_user_concurrency: int = Field(default=1, alias="KINDLE_USER_CONCURRENCY")
     kindle_enable_conversion: bool = Field(default=False, alias="KINDLE_ENABLE_CONVERSION")
     kindle_conversion_target_format: str = Field(default="epub", alias="KINDLE_CONVERSION_TARGET_FORMAT")
+    kindle_max_job_attempts: int = Field(default=3, alias="KINDLE_MAX_JOB_ATTEMPTS")
+    kindle_retry_base_delay_seconds: int = Field(default=10, alias="KINDLE_RETRY_BASE_DELAY_SECONDS")
+    kindle_delivery_log_retention_days: int = Field(default=90, alias="KINDLE_DELIVERY_LOG_RETENTION_DAYS")
+    admin_export_include_full_emails: bool = Field(default=False, alias="ADMIN_EXPORT_INCLUDE_FULL_EMAILS")
     database_path: str = Field(default="bot.db", alias="DATABASE_PATH")
     admin_user_ids: str = Field(default="", alias="ADMIN_USER_IDS")
 

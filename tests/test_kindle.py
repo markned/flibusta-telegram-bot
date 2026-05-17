@@ -229,3 +229,15 @@ def test_history_formatting(tmp_path: Path) -> None:
     text = format_history(run(repo.get_recent_for_user(1)))
     assert "Book [epub] — failed" in text
     assert "smtp exploded badly" in text
+
+def test_migrations_are_idempotent(tmp_path: Path) -> None:
+    db=Database(str(tmp_path/'m.db')); run(db.initialize()); run(db.initialize())
+    async def names():
+        async with db.connect() as c:
+            return [r[0] for r in await (await c.execute("SELECT name FROM sqlite_master WHERE type='table'")).fetchall()]
+    tables=run(names()); assert 'schema_migrations' in tables and 'user_preferences' in tables
+
+def test_legacy_prefs_import_and_rename(tmp_path: Path) -> None:
+    from app.repositories.user_preferences import UserPreferencesRepository
+    db=Database(str(tmp_path/'m.db')); run(db.initialize()); p=tmp_path/'user_prefs.json'; p.write_text('{"7":{"preferred_format":"fb2"}}')
+    repo=UserPreferencesRepository(db); assert run(repo.import_json_once(p))==1; assert not p.exists(); assert (tmp_path/'user_prefs.json.migrated').exists(); assert run(repo.get(7)).preferred_download_format=='fb2'

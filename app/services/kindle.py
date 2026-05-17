@@ -12,6 +12,7 @@ from app.repositories.kindle_deliveries import KindleDeliveriesRepository
 from app.repositories.kindle_settings import KindleSettingsRepository
 from app.services.conversion import ConversionNotAvailableError, ConversionService
 from app.services.email_sender import EmailSender
+from app.services.smtp_errors import classify_smtp_error
 
 ProgressCallback = Callable[[str], Awaitable[None]]
 
@@ -129,13 +130,13 @@ class KindleService:
         self.enable_conversion = enable_conversion
         self.conversion_target_format = conversion_target_format
 
-    async def create_queued_delivery(self, user_id: int, book_id: str) -> int:
+    async def create_queued_delivery(self, user_id: int, book_id: str, retry_of_delivery_id: int | None = None) -> int:
         settings = await self.settings_repo.get(user_id)
         if settings is None or not settings.send_to_kindle_enabled:
             raise KindleSettingsMissingError("Kindle e-mail is not configured.")
         if await self.deliveries_repo.count_recent_for_user(user_id) >= self.send_rate_limit_per_hour:
             raise KindleRateLimitError("Kindle send rate limit exceeded.")
-        return await self.deliveries_repo.create_delivery(user_id, book_id, status="queued")
+        return await self.deliveries_repo.create_delivery(user_id, book_id, status="queued", retry_of_delivery_id=retry_of_delivery_id)
 
     async def process_delivery(
         self,
@@ -210,7 +211,7 @@ class KindleService:
             await self.deliveries_repo.update_status(delivery_id, "sent")
             return KindleSendResult(details.title, filename, target_code, len(content))
         except Exception as exc:
-            await self.deliveries_repo.mark_failed(delivery_id, redact_sensitive_text(str(exc)))
+            await self.deliveries_repo.mark_failed(delivery_id, f"{classify_smtp_error(exc)}: {redact_sensitive_text(str(exc))}")
             raise
 
     async def send_book_to_kindle(self, user_id: int, book_id: str) -> KindleSendResult:

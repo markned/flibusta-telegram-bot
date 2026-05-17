@@ -94,3 +94,18 @@ Kindle sending uses a lightweight in-process async queue. It keeps Telegram resp
 - Calibre-backed conversion
 - EPUB normalization
 - stronger delivery retry system
+
+### Production notes
+- SQLite lives at `DATABASE_PATH`; startup runs small idempotent migrations automatically.
+- Legacy `user_prefs.json` is imported once and renamed to `user_prefs.json.migrated`.
+- Useful admin commands: `/admin_kindle_health`, `/admin_kindle_failures`, `/admin_kindle_delivery <id>`, `/admin_export_settings`, `/admin_cleanup_deliveries`.
+- Before deployment, verify SES identity, DKIM, production access, SMTP credentials, `SMTP_FROM_EMAIL`, and the SQLite path is writable.
+
+### Troubleshooting
+- Domain verified but mail is not delivered: check DKIM and SES event history.
+- DKIM pending: wait for DNS propagation and verify records.
+- SES sandbox: recipients may also need verification until production access is approved.
+- SMTP auth failed: use SES SMTP credentials, not AWS access keys.
+- Kindle mail missing: approve `SMTP_FROM_EMAIL` in Amazon Personal Document settings.
+- File too large: try a smaller format; the default e-mail-safe limit is 28 MB.
+- Hosting on Oracle is fine: delivery still leaves through Amazon SES SMTP.
