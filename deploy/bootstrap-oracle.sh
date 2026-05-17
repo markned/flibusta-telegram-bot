@@ -5,10 +5,18 @@ REPO_URL="https://github.com/markned/flibusta-telegram-bot.git"
 APP_USER="bookbot"
 APP_DIR="/home/${APP_USER}/flibusta-telegram-bot"
 SERVICE="flibusta-tg-bot"
+DEPLOY_PUBKEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOyjhkIPTP76TseOSMoMfMynCG+87eeSQ+GXU2dPiUnb flibusta-deploy@github-actions"
 
 if ! id "${APP_USER}" >/dev/null 2>&1; then
   sudo adduser --disabled-password --gecos "" "${APP_USER}"
 fi
+
+sudo install -d -m 700 -o "${APP_USER}" -g "${APP_USER}" "/home/${APP_USER}/.ssh"
+sudo touch "/home/${APP_USER}/.ssh/authorized_keys"
+sudo chown "${APP_USER}:${APP_USER}" "/home/${APP_USER}/.ssh/authorized_keys"
+sudo chmod 600 "/home/${APP_USER}/.ssh/authorized_keys"
+grep -qxF "${DEPLOY_PUBKEY}" "/home/${APP_USER}/.ssh/authorized_keys" || \
+  echo "${DEPLOY_PUBKEY}" | sudo tee -a "/home/${APP_USER}/.ssh/authorized_keys" >/dev/null
 
 sudo -u "${APP_USER}" bash -lc "
   set -euo pipefail
