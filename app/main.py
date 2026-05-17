@@ -1286,7 +1286,6 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dispatcher = Dispatcher()
-    dispatcher.include_router(router)
     dispatcher.include_router(
         build_kindle_router(
             db=db,
@@ -1305,6 +1304,7 @@ async def main() -> None:
             export_include_full_emails=settings.admin_export_include_full_emails,
         )
     )
+    dispatcher.include_router(router)
     try:
         await kindle_queue.start(bot)
         await setup_bot_commands(bot)
