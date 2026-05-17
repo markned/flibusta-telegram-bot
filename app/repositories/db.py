@@ -46,3 +46,11 @@ class Database:
                 """
             )
             await conn.commit()
+
+    async def ping(self) -> bool:
+        try:
+            async with self.connect() as conn:
+                row = await (await conn.execute("SELECT 1")).fetchone()
+            return bool(row)
+        except Exception:
+            return False

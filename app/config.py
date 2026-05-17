@@ -32,7 +32,12 @@ class Settings(BaseSettings):
     kindle_max_attachment_mb: int = Field(default=28, alias="KINDLE_MAX_ATTACHMENT_MB")
     kindle_default_format: str = Field(default="epub", alias="KINDLE_DEFAULT_FORMAT")
     kindle_send_rate_limit_per_hour: int = Field(default=5, alias="KINDLE_SEND_RATE_LIMIT_PER_HOUR")
+    kindle_worker_concurrency: int = Field(default=2, alias="KINDLE_WORKER_CONCURRENCY")
+    kindle_user_concurrency: int = Field(default=1, alias="KINDLE_USER_CONCURRENCY")
+    kindle_enable_conversion: bool = Field(default=False, alias="KINDLE_ENABLE_CONVERSION")
+    kindle_conversion_target_format: str = Field(default="epub", alias="KINDLE_CONVERSION_TARGET_FORMAT")
     database_path: str = Field(default="bot.db", alias="DATABASE_PATH")
+    admin_user_ids: str = Field(default="", alias="ADMIN_USER_IDS")
 
     @property
     def base_url(self) -> str:
@@ -45,3 +50,7 @@ class Settings(BaseSettings):
     @property
     def normalized_telegram_proxy(self) -> str | None:
         return self.telegram_proxy or None
+
+    @property
+    def admin_ids(self) -> set[int]:
+        return {int(item.strip()) for item in self.admin_user_ids.split(",") if item.strip().isdigit()}

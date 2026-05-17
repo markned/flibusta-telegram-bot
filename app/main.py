@@ -32,13 +32,15 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import Settings
 from app.flibusta import AuthorResult, BookDetails, FlibustaClient, FlibustaError
-from app.handlers.kindle import build_kindle_router
+from app.handlers.kindle import build_kindle_router, user_message_for_exception
 from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
 from app.repositories.db import Database
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository
 from app.repositories.kindle_settings import KindleSettingsRepository
 from app.services.email_sender import EmailSender
+from app.services.conversion import ConversionService
 from app.services.kindle import KindleService
+from app.services.kindle_queue import KindleQueue
 
 settings = Settings()
 logging.basicConfig(
@@ -109,9 +111,18 @@ kindle_service = KindleService(
     settings_repo=kindle_settings_repo,
     deliveries_repo=kindle_deliveries_repo,
     email_sender=email_sender,
+    conversion_service=ConversionService(),
     max_attachment_bytes=settings.kindle_max_attachment_mb * 1024 * 1024,
     default_format=settings.kindle_default_format,
     send_rate_limit_per_hour=settings.kindle_send_rate_limit_per_hour,
+    enable_conversion=settings.kindle_enable_conversion,
+    conversion_target_format=settings.kindle_conversion_target_format,
+)
+kindle_queue = KindleQueue(
+    service=kindle_service,
+    worker_concurrency=settings.kindle_worker_concurrency,
+    user_concurrency=settings.kindle_user_concurrency,
+    error_message_for_exception=user_message_for_exception,
 )
 
 
@@ -1084,6 +1095,14 @@ def _mask_sender(value: str | None) -> str:
     return f"{local[:1]}***@{domain}"
 
 
+def _smtp_config_present() -> bool:
+    try:
+        email_sender.validate_config()
+    except Exception:
+        return False
+    return True
+
+
 def _book_text(details: BookDetails) -> str:
     parts = [f"<b>{escape(details.title)}</b>"]
     if details.authors:
@@ -1248,6 +1267,8 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="kindle_help", description="настройка Send to Kindle"),
             BotCommand(command="kindle_status", description="статус Kindle"),
             BotCommand(command="kindle_remove", description="удалить Kindle e-mail"),
+            BotCommand(command="kindle_history", description="история Kindle"),
+            BotCommand(command="kindle_format", description="формат Kindle"),
             BotCommand(command="start", description="открыть меню"),
         ]
     )
@@ -1256,6 +1277,9 @@ async def setup_bot_commands(bot: Bot) -> None:
 async def main() -> None:
     log_startup_config()
     await db.initialize()
+    interrupted = await kindle_deliveries_repo.mark_interrupted_inflight_failed()
+    if interrupted:
+        logger.warning("Marked interrupted Kindle deliveries as failed: count=%s", interrupted)
     session = AiohttpSession(
         proxy=settings.normalized_telegram_proxy,
         timeout=settings.telegram_request_timeout_seconds,
@@ -1269,13 +1293,21 @@ async def main() -> None:
     dispatcher.include_router(router)
     dispatcher.include_router(
         build_kindle_router(
+            db=db,
             settings_repo=kindle_settings_repo,
-            kindle_service=kindle_service,
+            deliveries_repo=kindle_deliveries_repo,
+            kindle_queue=kindle_queue,
             smtp_from_email=settings.smtp_from_email,
+            smtp_host=settings.smtp_host,
+            smtp_port=settings.smtp_port,
+            smtp_config_present=_smtp_config_present(),
             default_format=settings.kindle_default_format,
+            max_attachment_mb=settings.kindle_max_attachment_mb,
+            admin_user_ids=settings.admin_ids,
         )
     )
     try:
+        await kindle_queue.start(bot)
         await setup_bot_commands(bot)
         while True:
             try:
@@ -1291,6 +1323,7 @@ async def main() -> None:
                 )
                 await sleep(settings.polling_retry_delay_seconds)
     finally:
+        await kindle_queue.stop()
         await flibusta.close()
         await bot.session.close()
 

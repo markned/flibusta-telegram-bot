@@ -3,6 +3,7 @@ from __future__ import annotations
 from email.message import EmailMessage
 
 import aiosmtplib
+from email_validator import EmailNotValidError, validate_email
 
 
 class EmailConfigurationError(RuntimeError):
@@ -40,6 +41,7 @@ class EmailSender:
         ]
         if missing:
             raise EmailConfigurationError(f"Missing SMTP configuration: {', '.join(missing)}")
+        validate_smtp_from_email(self.from_email or "")
 
     def build_message(
         self,
@@ -55,7 +57,7 @@ class EmailSender:
         message["From"] = self.from_email
         message["To"] = to_email
         message["Subject"] = subject
-        message.set_content("Книга во вложении. Sent by Flibusta Telegram Bot.")
+        message.set_content("Book attached. Sent by Flibusta Telegram Bot.")
         maintype, _, subtype = content_type.partition("/")
         message.add_attachment(
             content,
@@ -89,3 +91,10 @@ class EmailSender:
             password=self.password,
             start_tls=self.starttls,
         )
+
+
+def validate_smtp_from_email(value: str) -> str:
+    try:
+        return validate_email(value, check_deliverability=False).normalized
+    except EmailNotValidError as exc:
+        raise EmailConfigurationError("SMTP_FROM_EMAIL is not a valid e-mail address.") from exc

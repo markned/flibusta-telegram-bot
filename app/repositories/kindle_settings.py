@@ -63,6 +63,19 @@ class KindleSettingsRepository:
             await conn.execute("DELETE FROM user_kindle_settings WHERE user_id = ?", (user_id,))
             await conn.commit()
 
+    async def update_preferred_format(self, user_id: int, preferred_format: str) -> KindleSettings | None:
+        async with self.db.connect() as conn:
+            await conn.execute(
+                """
+                UPDATE user_kindle_settings
+                SET preferred_kindle_format = ?, updated_at = ?
+                WHERE user_id = ?
+                """,
+                (preferred_format, _now(), user_id),
+            )
+            await conn.commit()
+        return await self.get(user_id)
+
 
 def _now() -> str:
     return datetime.now(UTC).isoformat()

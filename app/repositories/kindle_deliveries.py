@@ -11,14 +11,21 @@ class KindleDelivery:
     id: int
     user_id: int
     book_id: str
+    title: str | None
+    format: str | None
+    filename: str | None
+    file_size_bytes: int | None
     status: str
+    error: str | None
+    created_at: str
+    updated_at: str
 
 
 class KindleDeliveriesRepository:
     def __init__(self, db: Database):
         self.db = db
 
-    async def create(self, user_id: int, book_id: str, status: str = "queued") -> int:
+    async def create_delivery(self, user_id: int, book_id: str, status: str = "queued") -> int:
         now = _now()
         async with self.db.connect() as conn:
             cursor = await conn.execute(
@@ -31,11 +38,11 @@ class KindleDeliveriesRepository:
             await conn.commit()
             return int(cursor.lastrowid)
 
-    async def update(
+    async def update_status(
         self,
         delivery_id: int,
-        *,
         status: str,
+        *,
         title: str | None = None,
         format: str | None = None,
         filename: str | None = None,
@@ -59,8 +66,27 @@ class KindleDeliveriesRepository:
             )
             await conn.commit()
 
-    async def count_recent_for_rate_limit(self, user_id: int) -> int:
-        since = (datetime.now(UTC) - timedelta(hours=1)).isoformat()
+    async def mark_failed(self, delivery_id: int, error: str) -> None:
+        await self.update_status(delivery_id, "failed", error=error)
+
+    async def get_recent_for_user(self, user_id: int, limit: int = 10) -> list[KindleDelivery]:
+        async with self.db.connect() as conn:
+            rows = await (
+                await conn.execute(
+                    """
+                    SELECT *
+                    FROM kindle_deliveries
+                    WHERE user_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (user_id, limit),
+                )
+            ).fetchall()
+        return [_delivery_from_row(row) for row in rows]
+
+    async def count_recent_for_user(self, user_id: int, hours: int = 1) -> int:
+        since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
         async with self.db.connect() as conn:
             row = await (
                 await conn.execute(
@@ -69,12 +95,53 @@ class KindleDeliveriesRepository:
                     FROM kindle_deliveries
                     WHERE user_id = ?
                       AND created_at >= ?
-                      AND status IN ('queued', 'failed', 'sent')
+                      AND status IN ('queued', 'downloading', 'downloaded', 'converting', 'sending', 'sent', 'failed')
                     """,
                     (user_id, since),
                 )
             ).fetchone()
         return int(row["count"])
+
+    async def count_recent_failures(self, hours: int = 24) -> int:
+        since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
+        async with self.db.connect() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT COUNT(*) AS count FROM kindle_deliveries WHERE status = 'failed' AND created_at >= ?",
+                    (since,),
+                )
+            ).fetchone()
+        return int(row["count"])
+
+    async def mark_interrupted_inflight_failed(self) -> int:
+        now = _now()
+        async with self.db.connect() as conn:
+            cursor = await conn.execute(
+                """
+                UPDATE kindle_deliveries
+                SET status = 'failed',
+                    error = 'interrupted by process restart',
+                    updated_at = ?
+                WHERE status IN ('queued', 'downloading', 'downloaded', 'converting', 'sending')
+                """,
+                (now,),
+            )
+            await conn.commit()
+            return cursor.rowcount
+
+    # Backward-compatible aliases for first-iteration callers/tests.
+    async def create(self, user_id: int, book_id: str, status: str = "queued") -> int:
+        return await self.create_delivery(user_id, book_id, status)
+
+    async def update(self, delivery_id: int, *, status: str, **kwargs) -> None:
+        await self.update_status(delivery_id, status, **kwargs)
+
+    async def count_recent_for_rate_limit(self, user_id: int) -> int:
+        return await self.count_recent_for_user(user_id, hours=1)
+
+
+def _delivery_from_row(row) -> KindleDelivery:
+    return KindleDelivery(**dict(row))
 
 
 def _now() -> str:
