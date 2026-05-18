@@ -169,13 +169,13 @@ def build_kindle_router(
         if message.from_user.id not in admin_user_ids:return
         items=await deliveries_repo.get_recent_failures()
         if not items: await message.answer("No recent Kindle failures."); return
-        await message.answer("\\n".join(f"{d.id} user={d.user_id} {d.title or d.book_id} [{d.format or '?'}] failed category={(d.last_error or d.error or 'unknown').split(':',1)[0]} {d.created_at[:16]}" for d in items))
+        await message.answer("\n".join(f"{d.id} user={d.user_id} {d.title or d.book_id} [{d.format or '?'}] failed category={(d.last_error or d.error or 'unknown').split(':',1)[0]} {d.created_at[:16]}" for d in items))
     @router.message(Command("admin_kindle_delivery"))
     async def admin_kindle_delivery(message:Message, command:CommandObject)->None:
         if message.from_user.id not in admin_user_ids:return
         arg=(command.args or '').strip(); d=await deliveries_repo.get_by_id(int(arg)) if arg.isdigit() else None
         if not d: await message.answer("Delivery not found."); return
-        await message.answer(f"id={d.id}\\nuser_id={d.user_id}\\nbook_id={d.book_id}\\ntitle={d.title}\\nformat={d.format}\\nfilename={d.filename}\\nsize={d.file_size_bytes}\\nstatus={d.status}\\nattempts={d.attempts}\\ncreated_at={d.created_at}\\nupdated_at={d.updated_at}\\nlast_error={_short_error(d.last_error or d.error or '')}")
+        await message.answer(f"id={d.id}\nuser_id={d.user_id}\nbook_id={d.book_id}\ntitle={d.title}\nformat={d.format}\nfilename={d.filename}\nsize={d.file_size_bytes}\nstatus={d.status}\nattempts={d.attempts}\ncreated_at={d.created_at}\nupdated_at={d.updated_at}\nlast_error={_short_error(d.last_error or d.error or '')}")
     @router.message(Command("admin_cleanup_deliveries"))
     async def admin_cleanup(message:Message)->None:
         if message.from_user.id not in admin_user_ids:return

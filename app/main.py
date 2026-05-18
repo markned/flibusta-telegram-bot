@@ -1438,9 +1438,9 @@ async def _send_no_results(message: Message, query: str) -> None:
     await telegram_retry(lambda: message.answer(f"Ничего не найдено по запросу: <b>{escape(query)}</b>",reply_markup=kb.as_markup()))
 
 def _combined_results_text(query,books,authors):
-    book_lines="\\n".join(f"• {escape(b.title)}" + (f" — {escape(b.author)}" if b.author else "") for b in books[:5])
-    author_lines="\\n".join(f"• {escape(a.name)}" for a in authors[:5])
-    return f"<b>Нашёл варианты</b>\\nПо запросу: <b>{escape(query)}</b>\\n\\n<b>Книги</b>\\n{book_lines}\\n\\n<b>Авторы</b>\\n{author_lines}"
+    book_lines="\n".join(f"• {escape(b.title)}" + (f" — {escape(b.author)}" if b.author else "") for b in books[:5])
+    author_lines="\n".join(f"• {escape(a.name)}" for a in authors[:5])
+    return f"<b>Нашёл варианты</b>\nПо запросу: <b>{escape(query)}</b>\n\n<b>Книги</b>\n{book_lines}\n\n<b>Авторы</b>\n{author_lines}"
 
 def _combined_results_keyboard(book_session,author_session):
     kb=InlineKeyboardBuilder()
@@ -1452,7 +1452,7 @@ def _combined_results_keyboard(book_session,author_session):
 async def _send_favorites_page(message: Message, user_id: int, page: int, edit: bool=False):
     items=await favorites_repo.list(user_id,limit=8,offset=page*8); count=await favorites_repo.count(user_id)
     if not items:
-        await (message.edit_text("<b>Избранное</b>\\n\\nПока пусто.") if edit else message.answer("<b>Избранное</b>\\n\\nПока пусто.")); return
+        await (message.edit_text("<b>Избранное</b>\n\nПока пусто.") if edit else message.answer("<b>Избранное</b>\n\nПока пусто.")); return
     kb=InlineKeyboardBuilder()
     for item in items:
         kb.row(InlineKeyboardButton(text=(item.title if not item.author else f"{item.title} — {item.author}")[:64],callback_data=f"book:{item.book_id}"),InlineKeyboardButton(text="✕",callback_data=f"fav_remove:{item.book_id}"))
@@ -1460,16 +1460,16 @@ async def _send_favorites_page(message: Message, user_id: int, page: int, edit: 
     if page>0: nav.append(InlineKeyboardButton(text="<<",callback_data=f"fav_page:{page-1}"))
     if (page+1)*8<count: nav.append(InlineKeyboardButton(text=">>",callback_data=f"fav_page:{page+1}"))
     if nav: kb.row(*nav)
-    text=f"<b>Избранное</b>\\n\\nКниг: {count}"
+    text=f"<b>Избранное</b>\n\nКниг: {count}"
     await (message.edit_text(text,reply_markup=kb.as_markup()) if edit else message.answer(text,reply_markup=kb.as_markup()))
 
 def _history_text(items:list[DownloadHistoryItem],failed:bool=False)->str:
-    if not items: return "<b>Неудачные отправки</b>\\n\\nПока пусто." if failed else "<b>История</b>\\n\\nПока пусто."
+    if not items: return "<b>Неудачные отправки</b>\n\nПока пусто." if failed else "<b>История</b>\n\nПока пусто."
     head="<b>Неудачные отправки</b>" if failed else "<b>История</b>"
     lines=[head]
     for item in items:
         lines.append(f"{item.created_at[:16]} — {item.title or item.book_id} [{item.format}] → {item.delivery_target}" + (f" ({item.error})" if failed and item.error else ""))
-    return "\\n".join(lines)
+    return "\n".join(lines)
 
 async def _notify_admins_about_request(bot: Bot, user: User) -> None:
     kb=InlineKeyboardBuilder()

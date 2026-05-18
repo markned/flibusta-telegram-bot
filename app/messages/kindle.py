@@ -6,9 +6,9 @@ def kindle_setup_text(sender: str | None) -> str:
  return (
   '<b>Настройка Kindle</b>\n\n'
   '1. Найди свой Kindle e-mail в настройках Amazon.\n'
-  f'2. Добавь <code>{escape(sender)}</code> в Approved Personal Document E-mail List.\n'
-  '3. Сохрани адрес здесь: <code>/kindle_email your_name@kindle.com</code>\n'
-  '4. После этого в карточке книги нажми «Отправить на Kindle».'
+  f'2. Разреши отправителя в Amazon:\n<code>{escape(sender)}</code>\n'
+  '3. Пришли сюда команду:\n<code>/kindle_email your_name@kindle.com</code>\n'
+  '4. После этого в карточке книги нажимай «Отправить на Kindle».'
  )
 
 def kindle_home_text(settings, sender: str | None) -> str:
