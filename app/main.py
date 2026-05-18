@@ -1037,6 +1037,7 @@ async def send_smart_results(message: Message, query: str) -> None:
 
 async def send_ai_results(message: Message, query: str) -> None:
     progress = await message.answer("Разбираю запрос…")
+    analysis = analyze_query(query)
     try:
         intent = await ai_assistant.understand(query)
     except Exception:
@@ -1046,6 +1047,16 @@ async def send_ai_results(message: Message, query: str) -> None:
         await _edit_progress(progress, "Не смог разобрать запрос через AI. Ищу обычным способом.")
         await send_smart_results(message, query)
         return
+    if analysis.recommendation_like and (intent.kind != "recommend" or _norm(query) in {_norm(item) for item in intent.search_queries}):
+        await _edit_progress(progress, "Похоже, это просьба о подборке. Уточняю варианты…")
+        intent = await ai_assistant.understand(query, force_recommend=True)
+        if intent.kind != "recommend" or _norm(query) in {_norm(item) for item in intent.search_queries}:
+            fallback = _recommendation_fallback_queries(query)
+            if fallback:
+                intent = type(intent)("recommend", fallback, "Подбираю книги по теме.")
+            else:
+                await _edit_progress(progress, "Не смог собрать надёжную подборку. Попробуй описать запрос чуть конкретнее.")
+                return
     await _edit_progress(progress, intent.reply)
     grouped_books = []
     all_authors = []
@@ -1265,6 +1276,12 @@ def _interleave_book_groups(groups):
             item=group[index]; key=(item.book_id,item.title,item.author)
             if key not in seen: seen.add(key); result.append(item)
     return result
+
+def _recommendation_fallback_queries(query:str)->list[str]:
+    q=_norm(query)
+    if "российск" in q and "постмодерн" in q: return ["Пелевин","Сорокин","Венедикт Ерофеев"]
+    if "зарубеж" in q and "постмодерн" in q: return ["Пол Остер","Харуки Мураками","Марк Данилевский"]
+    return []
 
 async def _edit_progress(message: Message, text: str) -> None:
     try:

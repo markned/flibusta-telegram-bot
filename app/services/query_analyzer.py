@@ -4,7 +4,7 @@ import re
 FORMAT_HINTS={'epub','fb2','pdf','mobi','txt'}
 @dataclass(frozen=True)
 class QueryAnalysis:
- original:str; cleaned:str; quoted_title:bool; likely_author:bool; format_hint:str|None; author_part:str|None; title_part:str|None; has_year_or_series:bool
+ original:str; cleaned:str; quoted_title:bool; likely_author:bool; format_hint:str|None; author_part:str|None; title_part:str|None; has_year_or_series:bool; recommendation_like:bool
 
 def analyze_query(query:str,max_words:int=12)->QueryAnalysis:
  original=query.strip(); quoted=bool(re.search(r'["«“][^"»”]+["»”]',original)); hint=None
@@ -26,7 +26,8 @@ def analyze_query(query:str,max_words:int=12)->QueryAnalysis:
   author=' '.join(kept[:2]); title=' '.join(kept[2:])
  likely=_looks_person(cleaned) and not quoted
  has_marker=bool(re.search(r'\b(?:18|19|20)\d{2}\b|#\d+|\bкн\.?\s*\d+',cleaned,re.I))
- return QueryAnalysis(original,cleaned,quoted,likely,hint,author,title,has_marker)
+ recommendation_like=bool(re.search(r'\b(какой-нибудь|посовет|подбери|похож|классика|известн|зарубежн|мрачн|современн|постмодерн|фантастик)\w*',cleaned,re.I))
+ return QueryAnalysis(original,cleaned,quoted,likely,hint,author,title,has_marker,recommendation_like)
 
 def _looks_person(text:str)->bool:
  parts=[p for p in re.split(r'\s+',text.strip()) if p]

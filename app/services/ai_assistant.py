@@ -24,7 +24,7 @@ INTENT_SCHEMA={
 
 class AiAssistant:
  def __init__(self,api_key:str|None,model:str,enabled:bool=False): self.api_key=api_key; self.model=model; self.enabled=enabled and bool(api_key)
- async def understand(self,text:str)->BookIntent:
+ async def understand(self,text:str,*,force_recommend:bool=False)->BookIntent:
   if not self.enabled: return BookIntent('search',[text],'Ищу подходящие варианты.')
   prompt='''Ты помощник книжного каталога. Твоя задача — превратить фразу пользователя в 1-3 КОРОТКИХ запроса, которые реально стоит отправить в библиотечный поиск.
 
@@ -38,6 +38,8 @@ class AiAssistant:
 - Если пользователь просит «классику российского постмодерна», хорошие запросы выглядят как «Пелевин», «Сорокин», «Москва-Петушки», а не как исходное предложение.
 - Если пользователь просит зарубежную литературу, хорошие запросы выглядят как «Пол Остер», «Харуки Мураками», «Марк Данилевский». Не начинай с неоднозначного названия книги, если оно легко даст ложные совпадения.
 - reply — одна короткая естественная фраза на русском, без обещаний того, чего ещё не найдено.'''
+  if force_recommend:
+   prompt += '\n\nЭто точно запрос на рекомендацию. kind должен быть "recommend". Верни только имена авторов или уникальные названия конкретных книг, не повторяй исходную фразу.'
   try:
    async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
     r=await client.post('https://api.openai.com/v1/responses',headers={'Authorization':f'Bearer {self.api_key}'},json={'model':self.model,'instructions':prompt,'input':text,'text':{'format':INTENT_SCHEMA}})

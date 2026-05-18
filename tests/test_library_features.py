@@ -123,3 +123,12 @@ def test_recommendation_details_text_includes_short_descriptions():
 def test_query_analysis_author_title_without_separator():
  a=analyze_query('Лев Толстой исповедь')
  assert a.author_part=='Лев Толстой' and a.title_part=='исповедь'
+
+def test_query_analysis_recommendation_like():
+ assert analyze_query('Классика российского постмодерна').recommendation_like
+ assert analyze_query('зарубежный известный постмодерн').recommendation_like
+
+def test_recommendation_fallback_queries():
+ from app.main import _recommendation_fallback_queries
+ assert _recommendation_fallback_queries('Классика российского постмодерна')[:2]==['Пелевин','Сорокин']
+ assert _recommendation_fallback_queries('зарубежный известный постмодерн')[0]=='Пол Остер'
