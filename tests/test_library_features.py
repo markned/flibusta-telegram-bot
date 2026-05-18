@@ -382,3 +382,19 @@ def test_recommendation_falls_back_to_smart_when_assistant_disabled(monkeypatch)
  monkeypatch.setattr(main,'send_smart_results',smart)
  run(main.search_text(_FakeMessage('антиутопия')))
  assert calls==['smart']
+
+def test_assistant_commands_hidden_when_disabled(monkeypatch):
+ import app.main as main
+ monkeypatch.setattr(main.settings,'ai_enabled',False)
+ monkeypatch.setattr(main.settings,'discovery_enabled',False)
+ assert main._assistant_bot_commands() == [main.BotCommand(command='recommend', description='подобрать книгу')]
+ assert main._assistant_ui_enabled() is False
+
+def test_assistant_commands_visible_when_enabled(monkeypatch):
+ import app.main as main
+ monkeypatch.setattr(main.settings,'ai_enabled',True)
+ monkeypatch.setattr(main.settings,'discovery_enabled',False)
+ assert main._assistant_ui_enabled() is True
+ assert [c.command for c in main._assistant_bot_commands()]==['recommend']
+ monkeypatch.setattr(main.settings,'discovery_enabled',True)
+ assert [c.command for c in main._assistant_bot_commands()]==['recommend','discover','discover_web']
