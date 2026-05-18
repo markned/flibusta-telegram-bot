@@ -31,3 +31,4 @@ class DiscoveryResult:
     mode: str
     books: list[MatchedBook]
     note: str | None = None
+    used_web: bool = False

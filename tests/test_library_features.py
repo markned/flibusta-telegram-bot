@@ -308,3 +308,17 @@ def test_exact_title_does_not_call_discovery_or_ai(monkeypatch):
  monkeypatch.setattr(main,'send_smart_results',smart); monkeypatch.setattr(main,'send_discovery_results',discovery); monkeypatch.setattr(main,'send_ai_results',ai)
  run(main.search_text(_FakeMessage('Подборка стихотворений')))
  assert calls==['smart']
+
+def test_admin_intent_is_admin_only_and_dry_run(monkeypatch):
+ import app.main as main
+ class Cmd: args='подборка хорошего русского постмодерна как Пелевин'
+ msg=_FakeMessage(); msg.from_user.id=9
+ monkeypatch.setattr(main.settings,'admin_user_ids','9')
+ async def boom(*a,**kw): raise AssertionError('must stay dry-run')
+ monkeypatch.setattr(main.ai_assistant,'understand',boom)
+ monkeypatch.setattr(main.flibusta,'search',boom)
+ run(main.admin_intent(msg,Cmd()))
+ assert msg.answers and 'discovery_optional' in msg.answers[-1][0] and 'Tavily would be called:' in msg.answers[-1][0]
+ other=_FakeMessage(); other.from_user.id=10
+ run(main.admin_intent(other,Cmd()))
+ assert not other.answers

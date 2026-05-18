@@ -57,7 +57,11 @@ Risks:
 - filtered generic recommendation anchors before AI expansion
 - passed cleaned recommendation context into AI planner
 - preserved exact title handling for `Подборка стихотворений`
+- added `/admin_intent` dry-run diagnostics and safe intent logging
+- expanded `/admin_discovery_status` without live network probes or secret output
+- discovery result UI now reports web source only when web snippets were actually used
 
 ## Intentionally deferred
 - no live Tavily health probe; admin status stays non-networked
 - no durable rate-limit table yet; current in-memory daily counter is deliberately lightweight
+- router heuristics still need watching for uncommon ambiguous two-word titles

@@ -30,7 +30,7 @@ class DiscoveryRecommender:
   key=f'discovery_result:{user_id}:{norm(query)}:{mode}:{int(use_web)}'
   try:
    cached=await self.cache_repo.get(key)
-   if cached: return DiscoveryResult(query=cached['query'],mode=cached['mode'],books=[MatchedBook(**b) for b in cached['books']],note=cached.get('note'))
+   if cached: return DiscoveryResult(query=cached['query'],mode=cached['mode'],books=[MatchedBook(**b) for b in cached['books']],note=cached.get('note'),used_web=bool(cached.get('used_web',False)))
   except Exception: logger.warning('discovery result cache read failed',exc_info=True)
   note=None; web_results=[]
   if use_web and self.web_enabled:
@@ -41,7 +41,7 @@ class DiscoveryRecommender:
   profile=await self._profile(user_id)
   ideas=await self.idea_generator.generate(query,mode=mode,profile=profile,web_results=web_results)
   books=await self.matcher.match(ideas,query)
-  result=DiscoveryResult(query,mode,books,note)
+  result=DiscoveryResult(query,mode,books,note,bool(web_results))
   if books:
    try: await self.cache_repo.set(key,'discovery_result',result,self.cache_ttl_seconds)
    except Exception: logger.warning('discovery result cache write failed',exc_info=True)

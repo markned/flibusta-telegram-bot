@@ -348,8 +348,42 @@ async def admin_discovery_status(message: Message) -> None:
         f"provider: {escape(settings.discovery_web_provider)}\n"
         f"api key present: {'yes' if bool(settings.discovery_web_api_key) else 'no'}\n"
         f"max web results: {settings.discovery_max_web_results}\n"
+        f"max snippet chars: {settings.discovery_max_web_snippet_chars}\n"
+        f"max Flibusta checks: {settings.discovery_max_flibusta_checks}\n"
         f"daily limits: {settings.discovery_user_daily_limit}/{settings.discovery_global_daily_limit}\n"
+        f"cache TTL: {settings.discovery_cache_ttl_seconds}\n"
+        f"Tavily active for discovery: {'yes' if _tavily_configured() else 'no'}\n"
         f"discovery cache rows: {discovery_rows}"
+    )
+
+@router.message(Command("admin_intent"))
+async def admin_intent(message: Message, command: CommandObject) -> None:
+    if message.from_user.id not in settings.admin_ids: return
+    query=(command.args or "").strip()
+    if not query:
+        await message.answer("Использование: /admin_intent <запрос>")
+        return
+    decision=route_intent(query)
+    ai_called=decision.kind in {IntentKind.RECOMMENDATION, IntentKind.DISCOVERY_OPTIONAL}
+    discovery_called=decision.kind == IntentKind.DISCOVERY_OPTIONAL
+    handler=_intent_handler(decision.kind)
+    await message.answer(
+        "<b>Intent dry-run</b>\n"
+        f"kind: {decision.kind.value}\n"
+        f"confidence: {decision.confidence:.2f}\n"
+        f"original: {escape(_truncate(query))}\n"
+        f"cleaned: {escape(decision.cleaned_query)}\n"
+        f"search_query: {escape(decision.search_query or '—')}\n"
+        f"author_part: {escape(decision.author_part or '—')}\n"
+        f"title_part: {escape(decision.title_part or '—')}\n"
+        f"topic: {escape(decision.topic or '—')}\n"
+        f"reference_authors: {escape(', '.join(decision.reference_authors) or '—')}\n"
+        f"format_hint: {escape(decision.format_hint or '—')}\n"
+        f"reasons: {escape(', '.join(decision.reasons) or '—')}\n"
+        f"AI would be called: {'yes' if ai_called else 'no'}\n"
+        f"discovery would be called: {'yes' if discovery_called else 'no'}\n"
+        f"Tavily would be called: {'yes' if discovery_called and _tavily_configured() else 'no'}\n"
+        f"handler: {handler}"
     )
 
 @router.message(Command("admin_stats"))
@@ -388,7 +422,8 @@ async def search_text(message: Message) -> None:
         await message.answer("Kindle: /kindle — меню, /kindle_setup — настройка.")
         return
     decision = route_intent(text)
-    logger.info("intent=%s confidence=%.2f reasons=%s", decision.kind.value, decision.confidence, ",".join(decision.reasons))
+    logger.info("user_id=%s intent=%s confidence=%.2f reasons=%s query_len=%s", message.from_user.id, decision.kind.value, decision.confidence, len(decision.reasons), len(text))
+    logger.debug("intent_detail query=%s cleaned=%s topic=%s", _truncate(text), decision.cleaned_query, decision.topic)
     if decision.kind == IntentKind.AUTHOR_TITLE_SEARCH:
         if await send_author_title_results(message, decision.author_part or "", decision.title_part or ""):
             return
@@ -1145,7 +1180,7 @@ async def send_discovery_results(message: Message, query: str, *, mode: str, use
     if not result.books:
         await _edit_progress(progress, "Я не нашёл достаточно совпадений в каталоге. Попробую обычный поиск.")
         return False
-    source = "интернет + библиотека" if use_web and result.note != "web_rate_limited" else "модель + библиотека"
+    source = "интернет + библиотека" if result.used_web else "модель + библиотека"
     lines = [
         "<b>Подборка</b>",
         f"Запрос: <b>{escape(query)}</b>",
@@ -1434,6 +1469,22 @@ def _recommendation_fallback_queries(query:str)->list[str]:
     if "российск" in q and "постмодерн" in q: return ["Пелевин","Сорокин","Венедикт Ерофеев"]
     if "зарубеж" in q and "постмодерн" in q: return ["Пол Остер","Харуки Мураками","Марк Данилевский"]
     return []
+
+def _tavily_configured() -> bool:
+    return bool(settings.discovery_enabled and settings.discovery_use_web and settings.discovery_web_provider == "tavily" and settings.discovery_web_api_key)
+
+def _truncate(text: str, limit: int = 160) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+def _intent_handler(kind: IntentKind) -> str:
+    return {
+        IntentKind.EXACT_SEARCH: "send_smart_results",
+        IntentKind.AUTHOR_SEARCH: "send_author_results",
+        IntentKind.AUTHOR_TITLE_SEARCH: "send_author_title_results",
+        IntentKind.RECOMMENDATION: "send_ai_results",
+        IntentKind.DISCOVERY_OPTIONAL: "discovery_recommender",
+        IntentKind.UNKNOWN_FALLBACK: "fallback",
+    }[kind]
 
 async def _send_weak_recommendation(message:Message,query:str)->None:
     sid=uuid4().hex[:10]; retry_sessions[sid]=query; _prune_sessions(retry_sessions)
