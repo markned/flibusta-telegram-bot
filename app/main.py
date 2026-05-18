@@ -165,7 +165,7 @@ kindle_queue = KindleQueue(
 )
 ai_assistant = AiAssistant(settings.openai_api_key, settings.ai_model, settings.ai_enabled,cache_repo=cache_repo,cache_ttl_seconds=settings.ai_intent_cache_ttl_seconds)
 
-_web_provider = TavilyWebSearchProvider(settings.discovery_web_api_key, timeout_seconds=settings.discovery_timeout_seconds, max_snippet_chars=settings.discovery_max_web_snippet_chars) if settings.discovery_web_provider == "tavily" and settings.discovery_web_api_key else DisabledWebSearchProvider()
+_web_provider = TavilyWebSearchProvider(settings.discovery_web_api_key, timeout_seconds=settings.discovery_timeout_seconds, max_snippet_chars=settings.discovery_max_web_snippet_chars) if settings.discovery_web_active else DisabledWebSearchProvider()
 discovery_recommender = DiscoveryRecommender(
     flibusta=flibusta,
     cache_repo=cache_repo,
@@ -177,7 +177,7 @@ discovery_recommender = DiscoveryRecommender(
     preferences_repo=user_preferences_repo,
     cache_ttl_seconds=settings.discovery_cache_ttl_seconds,
     max_web_results=settings.discovery_max_web_results,
-    web_enabled=settings.discovery_enabled and settings.discovery_use_web and settings.discovery_web_provider == "tavily" and bool(settings.discovery_web_api_key),
+    web_enabled=settings.discovery_web_active,
     rate_limiter=DiscoveryRateLimiter(settings.discovery_user_daily_limit, settings.discovery_global_daily_limit),
     concurrency=settings.discovery_concurrency,
 )
@@ -266,7 +266,7 @@ async def discover_web_command(message: Message, command: CommandObject) -> None
     if not query:
         await message.answer("Напиши тему после команды: /discover_web антиутопия")
         return
-    configured=settings.discovery_enabled and settings.discovery_use_web and settings.discovery_web_provider == "tavily" and bool(settings.discovery_web_api_key)
+    configured=settings.discovery_web_active
     if not configured:
         await message.answer("Веб-подборки сейчас не настроены. Попробую без интернета.")
     if await send_discovery_results(message, query, mode="discover_web", use_web=configured):
@@ -1471,7 +1471,7 @@ def _recommendation_fallback_queries(query:str)->list[str]:
     return []
 
 def _tavily_configured() -> bool:
-    return bool(settings.discovery_enabled and settings.discovery_use_web and settings.discovery_web_provider == "tavily" and settings.discovery_web_api_key)
+    return settings.discovery_web_active
 
 def _truncate(text: str, limit: int = 160) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"

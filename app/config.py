@@ -92,3 +92,11 @@ class Settings(BaseSettings):
     @property
     def admin_ids(self) -> set[int]:
         return {int(item.strip()) for item in self.admin_user_ids.split(",") if item.strip().isdigit()}
+
+    @property
+    def discovery_web_configured(self) -> bool:
+        return self.discovery_web_provider == "tavily" and bool(self.discovery_web_api_key)
+
+    @property
+    def discovery_web_active(self) -> bool:
+        return self.discovery_enabled and self.discovery_use_web and self.discovery_web_configured

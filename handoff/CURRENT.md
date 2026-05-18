@@ -60,6 +60,8 @@ Risks:
 - added `/admin_intent` dry-run diagnostics and safe intent logging
 - expanded `/admin_discovery_status` without live network probes or secret output
 - discovery result UI now reports web source only when web snippets were actually used
+- centralized discovery web activation behind safe `Settings` properties
+- added config regression tests so `DISCOVERY_*` env vars load without forcing Tavily on
 
 ## Intentionally deferred
 - no live Tavily health probe; admin status stays non-networked
