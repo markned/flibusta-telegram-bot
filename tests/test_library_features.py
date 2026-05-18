@@ -55,3 +55,16 @@ def test_ai_assistant_disabled_falls_back():
  from app.services.ai_assistant import AiAssistant
  result=run(AiAssistant(None,'gpt-5-nano',False).understand('что-то как Дюна'))
  assert result.search_queries==['что-то как Дюна']
+
+def test_ai_assistant_parses_structured_queries(monkeypatch):
+ from app.services.ai_assistant import AiAssistant
+ class Resp:
+  def raise_for_status(self): pass
+  def json(self): return {'output_text':'{"kind":"recommend","search_queries":["Пелевин","Сорокин"],"reply":"Вот с чего можно начать."}'}
+ class Client:
+  async def __aenter__(self): return self
+  async def __aexit__(self,*a): pass
+  async def post(self,*a,**kw): return Resp()
+ monkeypatch.setattr('app.services.ai_assistant.httpx.AsyncClient', lambda timeout: Client())
+ result=run(AiAssistant('key','gpt-5-nano',True).understand('Хочу классику российского постмодерна'))
+ assert result.search_queries==['Пелевин','Сорокин']

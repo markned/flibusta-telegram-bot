@@ -2,22 +2,46 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import httpx
+
 @dataclass(frozen=True)
 class BookIntent:
  kind:str; search_queries:list[str]; reply:str
+
+INTENT_SCHEMA={
+ 'type':'json_schema','name':'book_intent','strict':True,
+ 'schema':{
+  'type':'object','additionalProperties':False,
+  'properties':{
+   'kind':{'type':'string','enum':['search','recommend']},
+   'search_queries':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':3},
+   'reply':{'type':'string'},
+  },
+  'required':['kind','search_queries','reply'],
+ }
+}
+
 class AiAssistant:
  def __init__(self,api_key:str|None,model:str,enabled:bool=False): self.api_key=api_key; self.model=model; self.enabled=enabled and bool(api_key)
  async def understand(self,text:str)->BookIntent:
   if not self.enabled: return BookIntent('search',[text],'Ищу подходящие варианты.')
-  prompt='''Ты помощник книжного бота. Верни только JSON: {"kind":"search|recommend","search_queries":[...],"reply":"короткая русская фраза"}. Преврати запрос пользователя в 1-3 лаконичных поисковых запроса для каталога книг. Не выдумывай книги.'''
+  prompt='''Ты помощник книжного каталога. Твоя задача — превратить фразу пользователя в 1-3 КОРОТКИХ запроса, которые реально стоит отправить в библиотечный поиск.
+
+Правила:
+- Для точного запроса верни название книги или автора без лишних слов.
+- Для рекомендации верни конкретные поисковые зацепки: имена авторов, названия известных книг или короткие жанровые запросы, которые каталог может найти.
+- Никогда не возвращай исходную длинную фразу целиком, если это рекомендация.
+- Если пользователь просит «классику российского постмодерна», хорошие запросы выглядят как «Пелевин», «Сорокин», «Москва-Петушки», а не как исходное предложение.
+- reply — одна короткая естественная фраза на русском, без обещаний того, чего ещё не найдено.'''
   async with httpx.AsyncClient(timeout=20) as client:
-   r=await client.post('https://api.openai.com/v1/responses',headers={'Authorization':f'Bearer {self.api_key}'},json={'model':self.model,'instructions':prompt,'input':text})
+   r=await client.post('https://api.openai.com/v1/responses',headers={'Authorization':f'Bearer {self.api_key}'},json={'model':self.model,'instructions':prompt,'input':text,'text':{'format':INTENT_SCHEMA}})
    r.raise_for_status(); payload=r.json(); raw=payload.get('output_text') or _extract_text(payload)
   try:
    data=json.loads(raw); queries=[str(q).strip() for q in data.get('search_queries',[]) if str(q).strip()][:3]
-   return BookIntent(str(data.get('kind','search')),queries or [text],str(data.get('reply') or 'Ищу подходящие варианты.'))
+   if not queries: raise ValueError('empty queries')
+   return BookIntent(str(data.get('kind','search')),queries,str(data.get('reply') or 'Ищу подходящие варианты.'))
   except Exception:
    return BookIntent('search',[text],'Ищу подходящие варианты.')
+
 def _extract_text(payload):
  out=[]
  for item in payload.get('output',[]):
