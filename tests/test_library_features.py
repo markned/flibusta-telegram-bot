@@ -106,3 +106,8 @@ def test_ai_prompt_prefers_foreign_author_queries(monkeypatch):
  result=run(AiAssistant('key','gpt-5-nano',True).understand('зарубежный постмодерн от первого лица'))
  assert result.search_queries==['Пол Остер','Харуки Мураками']
  assert 'предпочитай имена авторов' in captured['instructions']
+
+def test_recommendation_books_are_interleaved():
+ from app.main import _interleave_book_groups
+ a=SearchResult('1','A','Author A'); b=SearchResult('2','B','Author A'); c=SearchResult('3','C','Author C'); d=SearchResult('4','D','Author C')
+ assert [x.book_id for x in _interleave_book_groups([[a,b],[c,d]])]==['1','3','2','4']

@@ -79,6 +79,7 @@ from app.ui.library import (
     formats_keyboard as render_formats_keyboard,
     history_text as _history_text,
     main_reply_keyboard,
+    recommendation_text as _recommendation_text,
     search_results_keyboard as _search_results_keyboard,
     search_results_text as _search_results_text,
 )
@@ -1005,16 +1006,22 @@ async def send_smart_results(message: Message, query: str) -> None:
 async def send_ai_results(message: Message, query: str) -> None:
     intent = await ai_assistant.understand(query)
     await message.answer(intent.reply)
-    all_books = []
+    grouped_books = []
     all_authors = []
     for candidate in intent.search_queries:
         raw_books, raw_authors = await flibusta.search_all(candidate, book_limit=settings.search_results_limit, author_limit=settings.search_results_limit)
-        all_books.extend(_rank_and_dedupe_books(raw_books, candidate))
+        ranked_books = _rank_and_dedupe_books(raw_books, candidate)
+        if ranked_books:
+            grouped_books.append(ranked_books[:2] if intent.kind == "recommend" else ranked_books)
         all_authors.extend(_rank_authors(raw_authors, candidate))
-    books = _dedupe_books_preserving_order(all_books)
+    books = _interleave_book_groups(grouped_books) if intent.kind == "recommend" else _dedupe_books_preserving_order([item for group in grouped_books for item in group])
     authors = _dedupe_authors_preserving_order(all_authors)
     if books or authors:
         label = ", ".join(intent.search_queries)
+        if intent.kind == "recommend" and books:
+            session=_create_search_session(message.from_user.id,message.chat.id,label,books,title=_recommendation_text(query,len(books)))
+            await message.answer(_search_results_text(session),reply_markup=_search_results_keyboard(session))
+            return
         if books and authors:
             bs=_create_search_session(message.from_user.id,message.chat.id,label,books); aus=_create_author_session(message.from_user.id,message.chat.id,label,authors)
             await message.answer(_combined_results_text(label,books,authors),reply_markup=_combined_results_keyboard(bs,aus))
@@ -1179,6 +1186,15 @@ def _dedupe_authors_preserving_order(items):
     seen=set(); result=[]
     for item in items:
         if item.author_id not in seen: seen.add(item.author_id); result.append(item)
+    return result
+
+def _interleave_book_groups(groups):
+    result=[]; seen=set(); width=max((len(g) for g in groups),default=0)
+    for index in range(width):
+        for group in groups:
+            if index >= len(group): continue
+            item=group[index]; key=(item.book_id,item.title,item.author)
+            if key not in seen: seen.add(key); result.append(item)
     return result
 
 async def _send_favorites_page(message: Message, user_id: int, page: int, edit: bool=False):

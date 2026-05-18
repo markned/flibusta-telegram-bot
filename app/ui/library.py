@@ -42,6 +42,8 @@ def combined_results_keyboard(bs:SearchSession,aus:AuthorSession):
  for item in bs.results[:5]: kb.row(InlineKeyboardButton(text=(item.title if not item.author else f'{item.title} - {item.author}')[:64],callback_data=f'book:{item.book_id}'))
  for item in aus.authors[:5]: kb.row(InlineKeyboardButton(text=f'Автор: {item.name}'[:64],callback_data=f'author:{aus.session_id}:{item.author_id}'))
  kb.row(InlineKeyboardButton(text='Показать больше книг',callback_data=f'page:{bs.session_id}:0'),InlineKeyboardButton(text='Показать больше авторов',callback_data=f'apage:{aus.session_id}:0')); return kb.as_markup()
+def recommendation_text(query:str,count:int)->str:
+ return f'<b>Подборка</b>\nПо запросу: <b>{escape(query)}</b>\nКниг: {count}'
 def book_text(details:BookDetails,annotation_max_chars:int,full_annotation:bool=False)->str:
  parts=[f'<b>{escape(details.title)}</b>']
  if details.authors: parts.append(escape(', '.join(details.authors[:5])))
