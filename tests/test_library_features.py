@@ -69,6 +69,22 @@ def test_ai_assistant_parses_structured_queries(monkeypatch):
  result=run(AiAssistant('key','gpt-5-nano',True).understand('Хочу классику российского постмодерна'))
  assert result.search_queries==['Пелевин','Сорокин']
 
+def test_ai_prompt_requests_russian_search_queries(monkeypatch):
+ from app.services.ai_assistant import AiAssistant
+ captured={}
+ class Resp:
+  def raise_for_status(self): pass
+  def json(self): return {'output_text':'{"kind":"recommend","search_queries":["Пол Остер","Город стекла"],"reply":"Вот с чего можно начать."}'}
+ class Client:
+  async def __aenter__(self): return self
+  async def __aexit__(self,*a): pass
+  async def post(self,*a,**kw):
+   captured.update(kw['json']); return Resp()
+ monkeypatch.setattr('app.services.ai_assistant.httpx.AsyncClient', lambda timeout: Client())
+ result=run(AiAssistant('key','gpt-5-nano',True).understand('зарубежный постмодерн'))
+ assert result.search_queries==['Пол Остер','Город стекла']
+ assert 'Каталог русскоязычный' in captured['instructions']
+
 def test_access_user_management(tmp_path:Path):
  from app.repositories.access import AccessRepository
  db=Database(str(tmp_path/'db.sqlite')); run(db.initialize()); repo=AccessRepository(db)
