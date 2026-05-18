@@ -161,3 +161,8 @@ def test_ai_intent_cache_hit_avoids_api_call(tmp_path:Path,monkeypatch):
  monkeypatch.setattr('app.services.ai_assistant.httpx.AsyncClient',boom)
  result=run(AiAssistant('key','gpt-5-nano',True,cache_repo=repo).understand('книга о попаданцах'))
  assert result.search_queries==['Артем Каменистый']
+
+def test_antiutopia_pack_has_broad_fallback():
+ from app.services.recommendation_packs import get_recommendation_pack
+ pack=get_recommendation_pack('антиутопия')
+ assert {'Оруэлл','Кобо Абэ','Стругацкие'}.issubset(set(pack))

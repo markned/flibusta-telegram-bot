@@ -320,12 +320,18 @@ async def search_text(message: Message) -> None:
     if text == LAST_BUTTON:
         await last_command(message); return
     if text == KINDLE_BUTTON:
+        await message.answer("Kindle: /kindle — меню, /kindle_setup — настройка.")
         return
     analysis = analyze_query(text)
     if analysis.author_part and analysis.title_part:
         if await send_author_title_results(message, analysis.author_part, analysis.title_part):
             return
-    await send_ai_results(message, text)
+    if await send_reversed_author_title_results(message, text):
+        return
+    if analysis.recommendation_like:
+        await send_ai_results(message, text)
+        return
+    await send_smart_results(message, text)
 
 
 @router.callback_query(F.data.startswith("book:"))
@@ -357,6 +363,12 @@ async def show_book(callback: CallbackQuery) -> None:
         title=details.title,
         formats=",".join(item.code for item in details.formats) or "none",
         duration=elapsed(started_at),
+    )
+    await telegram_retry(
+        lambda: message.answer(
+            _search_results_text(session),
+            reply_markup=_search_results_keyboard(session),
+        )
     )
     preferred_format = await _preferred_format(callback.from_user.id)
     await last_books_repo.upsert(callback.from_user.id, details.book_id, details.title, ", ".join(details.authors) or None, "opened")
@@ -864,12 +876,12 @@ async def send_author_title_results(message: Message, author: str, title: str) -
     )
     await message.answer(_search_results_text(session), reply_markup=_search_results_keyboard(session))
     return True
-    await telegram_retry(
-        lambda: message.answer(
-            _search_results_text(session),
-            reply_markup=_search_results_keyboard(session),
-        )
-    )
+
+async def send_reversed_author_title_results(message: Message, query: str) -> bool:
+    words = query.split()
+    if not 2 <= len(words) <= 4:
+        return False
+    return await send_author_title_results(message, words[-1], " ".join(words[:-1]))
 
 
 async def send_author_results(message: Message, query: str) -> None:
@@ -932,10 +944,10 @@ async def send_author_results(message: Message, query: str) -> None:
     )
 
 
-async def send_smart_results(message: Message, query: str) -> None:
+async def send_smart_results(message: Message, query: str, *, show_no_results: bool = True) -> bool:
     if not _allow_search(message.from_user.id):
         await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
-        return
+        return False
     started_at = monotonic()
     analysis = analyze_query(query)
     cleaned = _clean_query(analysis.cleaned or query)
@@ -973,7 +985,7 @@ async def send_smart_results(message: Message, query: str) -> None:
             duration=elapsed(started_at),
         )
         await telegram_retry(lambda: message.answer(str(exc)))
-        return
+        return False
 
     books = _rank_and_dedupe_books(raw_books, query)
     authors = _rank_authors(raw_authors, query)
@@ -997,13 +1009,13 @@ async def send_smart_results(message: Message, query: str) -> None:
                 reply_markup=_author_results_keyboard(session),
             )
         )
-        return
+        return True
 
     if books and authors and not top_book_is_exact and not top_author_is_exact and not analysis.quoted_title:
         book_session = _create_search_session(message.from_user.id, message.chat.id, used_query, books)
         author_session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
         await telegram_retry(lambda: message.answer(_combined_results_text(used_query, books, authors), reply_markup=_combined_results_keyboard(book_session, author_session)))
-        return
+        return True
 
     if books:
         title = None
@@ -1025,7 +1037,7 @@ async def send_smart_results(message: Message, query: str) -> None:
                 reply_markup=_search_results_keyboard(session),
             )
         )
-        return
+        return True
 
     if authors:
         session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
@@ -1035,9 +1047,11 @@ async def send_smart_results(message: Message, query: str) -> None:
                 reply_markup=_author_results_keyboard(session),
             )
         )
-        return
+        return True
 
-    await _send_no_results(message, query)
+    if show_no_results:
+        await _send_no_results(message, query)
+    return False
 
 async def send_ai_results(message: Message, query: str) -> None:
     progress = await message.answer("Разбираю запрос…")
@@ -1059,6 +1073,8 @@ async def send_ai_results(message: Message, query: str) -> None:
             if fallback:
                 intent = type(intent)("recommend", fallback, "Подбираю книги по теме.", [], "")
             else:
+                if await send_smart_results(message, query, show_no_results=False):
+                    return
                 await _edit_progress(progress, "Не смог собрать надёжную подборку. Попробуй описать запрос чуть конкретнее.")
                 return
     await _edit_progress(progress, intent.reply)
@@ -1088,6 +1104,8 @@ async def send_ai_results(message: Message, query: str) -> None:
     authors = _dedupe_authors_preserving_order(all_authors)
     if intent.kind=="recommend" and len(books)<settings.ai_recommendation_min_results:
         await _edit_progress(progress,"Я не нашёл достаточно точных совпадений.")
+        if await send_smart_results(message, query, show_no_results=False):
+            return
         await _send_weak_recommendation(message,query)
         return
     if books or authors:
