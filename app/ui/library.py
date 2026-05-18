@@ -44,6 +44,18 @@ def combined_results_keyboard(bs:SearchSession,aus:AuthorSession):
  kb.row(InlineKeyboardButton(text='Показать больше книг',callback_data=f'page:{bs.session_id}:0'),InlineKeyboardButton(text='Показать больше авторов',callback_data=f'apage:{aus.session_id}:0')); return kb.as_markup()
 def recommendation_text(query:str,count:int)->str:
  return f'<b>Подборка</b>\nПо запросу: <b>{escape(query)}</b>\nКниг: {count}'
+def recommendation_details_text(query:str,items:list[tuple])->str:
+ lines=[f'<b>Подборка</b>\nПо запросу: <b>{escape(query)}</b>']
+ for index,(book,details) in enumerate(items,1):
+  annotation=(details.annotation or '').strip()
+  if annotation:
+   annotation=' '.join(annotation.split())
+   if len(annotation)>180: annotation=annotation[:177].rstrip()+'…'
+  else:
+   annotation='Аннотация не указана.'
+  author=book.author or ', '.join(details.authors) or 'Автор не указан'
+  lines.append(f'<b>{index}. {escape(book.title)}</b> — {escape(author)}\n{escape(annotation)}')
+ return '\n\n'.join(lines)
 def book_text(details:BookDetails,annotation_max_chars:int,full_annotation:bool=False)->str:
  parts=[f'<b>{escape(details.title)}</b>']
  if details.authors: parts.append(escape(', '.join(details.authors[:5])))

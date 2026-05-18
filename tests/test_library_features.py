@@ -111,3 +111,11 @@ def test_recommendation_books_are_interleaved():
  from app.main import _interleave_book_groups
  a=SearchResult('1','A','Author A'); b=SearchResult('2','B','Author A'); c=SearchResult('3','C','Author C'); d=SearchResult('4','D','Author C')
  assert [x.book_id for x in _interleave_book_groups([[a,b],[c,d]])]==['1','3','2','4']
+
+def test_recommendation_details_text_includes_short_descriptions():
+ from app.ui.library import recommendation_details_text
+ from app.flibusta import BookDetails
+ book=SearchResult('1','Книга','Автор')
+ details=BookDetails(book_id='1',title='Книга',authors=['Автор'],author_refs=[],translators=[],illustrators=[],genres=[],file_size=None,pages=None,annotation='Очень длинное описание книги. '*20,formats=[],page_url='x')
+ text=recommendation_details_text('запрос',[(book,details)])
+ assert '<b>1. Книга</b>' in text and 'Автор' in text and '…' in text

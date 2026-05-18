@@ -80,6 +80,7 @@ from app.ui.library import (
     history_text as _history_text,
     main_reply_keyboard,
     recommendation_text as _recommendation_text,
+    recommendation_details_text as _recommendation_details_text,
     search_results_keyboard as _search_results_keyboard,
     search_results_text as _search_results_text,
 )
@@ -1005,7 +1006,15 @@ async def send_smart_results(message: Message, query: str) -> None:
 
 async def send_ai_results(message: Message, query: str) -> None:
     progress = await message.answer("Разбираю запрос…")
-    intent = await ai_assistant.understand(query)
+    try:
+        intent = await ai_assistant.understand(query)
+    except Exception:
+        logger.exception("AI search preparation failed")
+        intent = None
+    if intent is None:
+        await _edit_progress(progress, "Не смог разобрать запрос через AI. Ищу обычным способом.")
+        await send_smart_results(message, query)
+        return
     await _edit_progress(progress, intent.reply)
     grouped_books = []
     all_authors = []
@@ -1016,12 +1025,34 @@ async def send_ai_results(message: Message, query: str) -> None:
         if ranked_books:
             grouped_books.append(ranked_books[:2] if intent.kind == "recommend" else ranked_books)
         all_authors.extend(_rank_authors(raw_authors, candidate))
+        if intent.kind == "recommend":
+            for author in _rank_authors(raw_authors, candidate)[:1]:
+                try:
+                    _, author_books = await flibusta.author_books(author.author_id, limit=4)
+                    if author_books:
+                        grouped_books.append(author_books[:4])
+                except FlibustaError:
+                    logger.info("Could not expand recommendation author_id=%s", author.author_id)
     books = _interleave_book_groups(grouped_books) if intent.kind == "recommend" else _dedupe_books_preserving_order([item for group in grouped_books for item in group])
     authors = _dedupe_authors_preserving_order(all_authors)
     if books or authors:
         label = ", ".join(intent.search_queries)
         if intent.kind == "recommend" and books:
-            session=_create_search_session(message.from_user.id,message.chat.id,label,books,title=_recommendation_text(query,len(books)))
+            selected=books[:10]
+            await _edit_progress(progress, "Читаю аннотации для подборки…")
+            detailed=[]
+            for book in selected:
+                try:
+                    detailed.append((book, await flibusta.details(book.book_id)))
+                except FlibustaError:
+                    continue
+            if detailed:
+                selected=[book for book,_ in detailed]
+                session=_create_search_session(message.from_user.id,message.chat.id,label,selected,title=_recommendation_text(query,len(selected)))
+                await _edit_progress(progress, "Собрал подборку.")
+                await message.answer(_recommendation_details_text(query,detailed),reply_markup=_search_results_keyboard(session))
+                return
+            session=_create_search_session(message.from_user.id,message.chat.id,label,selected,title=_recommendation_text(query,len(selected)))
             await _edit_progress(progress, "Собрал подборку.")
             await message.answer(_search_results_text(session),reply_markup=_search_results_keyboard(session))
             return

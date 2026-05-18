@@ -2,6 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import httpx
+import logging
+logger=logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class BookIntent:
@@ -36,9 +38,13 @@ class AiAssistant:
 - Если пользователь просит «классику российского постмодерна», хорошие запросы выглядят как «Пелевин», «Сорокин», «Москва-Петушки», а не как исходное предложение.
 - Если пользователь просит зарубежную литературу, хорошие запросы выглядят как «Пол Остер», «Харуки Мураками», «Марк Данилевский». Не начинай с неоднозначного названия книги, если оно легко даст ложные совпадения.
 - reply — одна короткая естественная фраза на русском, без обещаний того, чего ещё не найдено.'''
-  async with httpx.AsyncClient(timeout=20) as client:
-   r=await client.post('https://api.openai.com/v1/responses',headers={'Authorization':f'Bearer {self.api_key}'},json={'model':self.model,'instructions':prompt,'input':text,'text':{'format':INTENT_SCHEMA}})
-   r.raise_for_status(); payload=r.json(); raw=payload.get('output_text') or _extract_text(payload)
+  try:
+   async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
+    r=await client.post('https://api.openai.com/v1/responses',headers={'Authorization':f'Bearer {self.api_key}'},json={'model':self.model,'instructions':prompt,'input':text,'text':{'format':INTENT_SCHEMA}})
+    r.raise_for_status(); payload=r.json(); raw=payload.get('output_text') or _extract_text(payload)
+  except Exception:
+   logger.warning('AI intent request failed; falling back to plain search',exc_info=True)
+   return BookIntent('search',[text],'AI сейчас отвечает медленно. Ищу обычным способом.')
   try:
    data=json.loads(raw); queries=[str(q).strip() for q in data.get('search_queries',[]) if str(q).strip()][:3]
    if not queries: raise ValueError('empty queries')
