@@ -91,3 +91,18 @@ def test_access_user_management(tmp_path:Path):
  run(repo.ensure_user(7,'approved',1)); assert run(repo.count_by_status())['approved']==1
  run(repo.ensure_user(7,'blocked',1)); assert run(repo.get_user(7)).status=='blocked'
  assert run(repo.delete_user(7))==1
+
+def test_ai_prompt_prefers_foreign_author_queries(monkeypatch):
+ from app.services.ai_assistant import AiAssistant
+ captured={}
+ class Resp:
+  def raise_for_status(self): pass
+  def json(self): return {'output_text':'{"kind":"recommend","search_queries":["Пол Остер","Харуки Мураками"],"reply":"Вот несколько направлений."}'}
+ class Client:
+  async def __aenter__(self): return self
+  async def __aexit__(self,*a): pass
+  async def post(self,*a,**kw): captured.update(kw['json']); return Resp()
+ monkeypatch.setattr('app.services.ai_assistant.httpx.AsyncClient', lambda timeout: Client())
+ result=run(AiAssistant('key','gpt-5-nano',True).understand('зарубежный постмодерн от первого лица'))
+ assert result.search_queries==['Пол Остер','Харуки Мураками']
+ assert 'предпочитай имена авторов' in captured['instructions']

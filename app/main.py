@@ -1005,21 +1005,26 @@ async def send_smart_results(message: Message, query: str) -> None:
 async def send_ai_results(message: Message, query: str) -> None:
     intent = await ai_assistant.understand(query)
     await message.answer(intent.reply)
+    all_books = []
+    all_authors = []
     for candidate in intent.search_queries:
         raw_books, raw_authors = await flibusta.search_all(candidate, book_limit=settings.search_results_limit, author_limit=settings.search_results_limit)
-        books = _rank_and_dedupe_books(raw_books, candidate)
-        authors = _rank_authors(raw_authors, candidate)
-        if books or authors:
-            if books and authors:
-                bs=_create_search_session(message.from_user.id,message.chat.id,candidate,books); aus=_create_author_session(message.from_user.id,message.chat.id,candidate,authors)
-                await message.answer(_combined_results_text(candidate,books,authors),reply_markup=_combined_results_keyboard(bs,aus))
-            elif books:
-                session=_create_search_session(message.from_user.id,message.chat.id,candidate,books,title=f"Подобрал по запросу: <b>{escape(candidate)}</b>")
-                await message.answer(_search_results_text(session),reply_markup=_search_results_keyboard(session))
-            else:
-                session=_create_author_session(message.from_user.id,message.chat.id,candidate,authors)
-                await message.answer(_author_results_text(session),reply_markup=_author_results_keyboard(session))
-            return
+        all_books.extend(_rank_and_dedupe_books(raw_books, candidate))
+        all_authors.extend(_rank_authors(raw_authors, candidate))
+    books = _dedupe_books_preserving_order(all_books)
+    authors = _dedupe_authors_preserving_order(all_authors)
+    if books or authors:
+        label = ", ".join(intent.search_queries)
+        if books and authors:
+            bs=_create_search_session(message.from_user.id,message.chat.id,label,books); aus=_create_author_session(message.from_user.id,message.chat.id,label,authors)
+            await message.answer(_combined_results_text(label,books,authors),reply_markup=_combined_results_keyboard(bs,aus))
+        elif books:
+            session=_create_search_session(message.from_user.id,message.chat.id,label,books,title=f"<b>Подобрал варианты</b>\nПо запросам: <b>{escape(label)}</b>")
+            await message.answer(_search_results_text(session),reply_markup=_search_results_keyboard(session))
+        else:
+            session=_create_author_session(message.from_user.id,message.chat.id,label,authors)
+            await message.answer(_author_results_text(session),reply_markup=_author_results_keyboard(session))
+        return
     await _send_no_results(message, query)
 
 
@@ -1162,6 +1167,19 @@ async def _send_no_results(message: Message, query: str) -> None:
     kb.row(InlineKeyboardButton(text="Искать как книгу",callback_data=f"retry_book:{sid}"),InlineKeyboardButton(text="Искать как автора",callback_data=f"retry_author:{sid}"))
     kb.row(InlineKeyboardButton(text="Убрать кавычки и повторить",callback_data=f"retry_clean:{sid}"))
     await telegram_retry(lambda: message.answer(f"Ничего не найдено по запросу: <b>{escape(query)}</b>",reply_markup=kb.as_markup()))
+
+def _dedupe_books_preserving_order(items):
+    seen=set(); result=[]
+    for item in items:
+        key=(item.book_id, item.title, item.author)
+        if key not in seen: seen.add(key); result.append(item)
+    return result
+
+def _dedupe_authors_preserving_order(items):
+    seen=set(); result=[]
+    for item in items:
+        if item.author_id not in seen: seen.add(item.author_id); result.append(item)
+    return result
 
 async def _send_favorites_page(message: Message, user_id: int, page: int, edit: bool=False):
     items=await favorites_repo.list(user_id,limit=8,offset=page*8); count=await favorites_repo.count(user_id)
