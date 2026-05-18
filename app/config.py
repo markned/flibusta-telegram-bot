@@ -76,6 +76,10 @@ class Settings(BaseSettings):
     discovery_concurrency: int = Field(default=1, alias="DISCOVERY_CONCURRENCY")
     discovery_model: str | None = Field(default=None, alias="DISCOVERY_MODEL")
     discovery_timeout_seconds: float = Field(default=15, alias="DISCOVERY_TIMEOUT_SECONDS")
+    recommendation_confirmation_ttl_seconds: int = Field(default=900, alias="RECOMMENDATION_CONFIRMATION_TTL_SECONDS")
+    recommendation_confirmation_required: bool = Field(default=True, alias="RECOMMENDATION_CONFIRMATION_REQUIRED")
+    literary_sources_enabled: bool = Field(default=False, alias="LITERARY_SOURCES_ENABLED")
+    literary_source_provider: str = Field(default="disabled", alias="LITERARY_SOURCE_PROVIDER")
 
     @property
     def base_url(self) -> str:

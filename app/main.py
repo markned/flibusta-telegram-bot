@@ -50,6 +50,8 @@ from app.services.kindle_queue import KindleQueue
 from app.services.cached_flibusta import CachedFlibustaClient
 from app.services.query_analyzer import analyze_query
 from app.services.intent_router import IntentKind, route_intent
+from app.services.pending_recommendations import PendingRecommendationStore
+from app.services.recommendation_clarifier import build_recommendation_clarification
 from app.services.ai_assistant import AiAssistant
 from app.services.recommendation_packs import get_recommendation_pack
 from app.services.recommendation_filters import is_bad_recommendation_candidate, is_weak_recommendation_anchor
@@ -166,6 +168,7 @@ kindle_queue = KindleQueue(
 ai_assistant = AiAssistant(settings.openai_api_key, settings.ai_model, settings.ai_enabled,cache_repo=cache_repo,cache_ttl_seconds=settings.ai_intent_cache_ttl_seconds)
 
 _web_provider = TavilyWebSearchProvider(settings.discovery_web_api_key, timeout_seconds=settings.discovery_timeout_seconds, max_snippet_chars=settings.discovery_max_web_snippet_chars) if settings.discovery_web_active else DisabledWebSearchProvider()
+pending_recommendations = PendingRecommendationStore(settings.recommendation_confirmation_ttl_seconds)
 discovery_recommender = DiscoveryRecommender(
     flibusta=flibusta,
     cache_repo=cache_repo,
@@ -366,6 +369,7 @@ async def admin_intent(message: Message, command: CommandObject) -> None:
     decision=route_intent(query)
     ai_called=decision.kind in {IntentKind.RECOMMENDATION, IntentKind.DISCOVERY_OPTIONAL}
     discovery_called=decision.kind == IntentKind.DISCOVERY_OPTIONAL
+    ask_confirmation=ai_called and settings.recommendation_confirmation_required
     handler=_intent_handler(decision.kind)
     await message.answer(
         "<b>Intent dry-run</b>\n"
@@ -383,6 +387,9 @@ async def admin_intent(message: Message, command: CommandObject) -> None:
         f"AI would be called: {'yes' if ai_called else 'no'}\n"
         f"discovery would be called: {'yes' if discovery_called else 'no'}\n"
         f"Tavily would be called: {'yes' if discovery_called and _tavily_configured() else 'no'}\n"
+        f"would ask confirmation: {'yes' if ask_confirmation else 'no'}\n"
+        f"confirmation preview: {escape(build_recommendation_clarification(query, decision)) if ask_confirmation else '—'}\n"
+        f"use_web planned: {'yes' if discovery_called and settings.discovery_use_web else 'no'}\n"
         f"handler: {handler}"
     )
 
@@ -434,15 +441,94 @@ async def search_text(message: Message) -> None:
     if decision.kind == IntentKind.AUTHOR_SEARCH:
         await send_author_results(message, decision.search_query or text)
         return
-    if decision.kind == IntentKind.DISCOVERY_OPTIONAL:
-        if await send_discovery_results(message, decision.topic or text, mode="auto", use_web=settings.discovery_use_web):
+    if decision.kind in {IntentKind.DISCOVERY_OPTIONAL, IntentKind.RECOMMENDATION}:
+        if settings.recommendation_confirmation_required:
+            await ask_recommendation_confirmation(message, text, decision)
+            return
+        if decision.kind == IntentKind.DISCOVERY_OPTIONAL and await send_discovery_results(message, decision.topic or text, mode="auto", use_web=settings.discovery_use_web):
             return
         await send_ai_results(message, text, topic=decision.topic, intent=decision.kind.value)
         return
-    if decision.kind == IntentKind.RECOMMENDATION:
-        await send_ai_results(message, text, topic=decision.topic, intent=decision.kind.value)
-        return
     await send_smart_results(message, text)
+
+async def ask_recommendation_confirmation(message: Message, query: str, decision) -> None:
+    pending = pending_recommendations.create(
+        user_id=message.from_user.id,
+        chat_id=message.chat.id,
+        original_query=query,
+        intent_kind=decision.kind.value,
+        topic=decision.topic or query,
+        use_web=decision.kind == IntentKind.DISCOVERY_OPTIONAL and settings.discovery_use_web,
+        mode="auto",
+    )
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Да, собрать подборку", callback_data=f"rec_confirm:{pending.pending_id}"))
+    kb.row(InlineKeyboardButton(text="Нет, искать точную фразу", callback_data=f"rec_exact:{pending.pending_id}"))
+    kb.row(InlineKeyboardButton(text="Отмена", callback_data=f"rec_cancel:{pending.pending_id}"))
+    await message.answer(build_recommendation_clarification(query, decision), reply_markup=kb.as_markup())
+
+def _pending_for_callback(callback: CallbackQuery):
+    pending_id = callback.data.split(":", 1)[1]
+    pending = pending_recommendations.get(pending_id)
+    if pending is None:
+        return None
+    if pending.user_id != callback.from_user.id or pending.chat_id != callback.message.chat.id:
+        return False
+    return pending
+
+class _CallbackMessageProxy:
+    def __init__(self, callback: CallbackQuery):
+        self.from_user = callback.from_user
+        self.chat = callback.message.chat
+        self.bot = callback.message.bot
+        self._message = callback.message
+    async def answer(self, *args, **kwargs):
+        return await self._message.answer(*args, **kwargs)
+
+@router.callback_query(F.data.startswith("rec_confirm:"))
+async def confirm_recommendation(callback: CallbackQuery) -> None:
+    pending = _pending_for_callback(callback)
+    if pending is None:
+        await callback.answer("Запрос устарел. Напиши его ещё раз.")
+        return
+    if pending is False:
+        await callback.answer("Это не твой запрос.")
+        return
+    pending_recommendations.delete(pending.pending_id)
+    await callback.answer()
+    message = _CallbackMessageProxy(callback)
+    if await send_discovery_results(message, pending.topic, mode=pending.mode, use_web=pending.use_web):
+        return
+    await send_ai_results(message, pending.original_query, topic=pending.topic, intent=pending.intent_kind)
+
+@router.callback_query(F.data.startswith("rec_exact:"))
+async def exact_recommendation(callback: CallbackQuery) -> None:
+    pending = _pending_for_callback(callback)
+    if pending is None:
+        await callback.answer("Запрос устарел. Напиши его ещё раз.")
+        return
+    if pending is False:
+        await callback.answer("Это не твой запрос.")
+        return
+    pending_recommendations.delete(pending.pending_id)
+    await callback.answer()
+    await send_smart_results(_CallbackMessageProxy(callback), pending.original_query)
+
+@router.callback_query(F.data.startswith("rec_cancel:"))
+async def cancel_recommendation(callback: CallbackQuery) -> None:
+    pending = _pending_for_callback(callback)
+    if pending is None:
+        await callback.answer("Запрос устарел. Напиши его ещё раз.")
+        return
+    if pending is False:
+        await callback.answer("Это не твой запрос.")
+        return
+    pending_recommendations.delete(pending.pending_id)
+    await callback.answer("Ок, отменил.")
+    try:
+        await callback.message.edit_text("Ок, отменил.")
+    except Exception:
+        pass
 
 
 @router.callback_query(F.data.startswith("book:"))
@@ -474,12 +560,6 @@ async def show_book(callback: CallbackQuery) -> None:
         title=details.title,
         formats=",".join(item.code for item in details.formats) or "none",
         duration=elapsed(started_at),
-    )
-    await telegram_retry(
-        lambda: message.answer(
-            _search_results_text(session),
-            reply_markup=_search_results_keyboard(session),
-        )
     )
     preferred_format = await _preferred_format(callback.from_user.id)
     await last_books_repo.upsert(callback.from_user.id, details.book_id, details.title, ", ".join(details.authors) or None, "opened")
@@ -1178,15 +1258,15 @@ async def send_discovery_results(message: Message, query: str, *, mode: str, use
     if result.note == "web_rate_limited":
         await _edit_progress(progress, "Лимит веб-подборок на сегодня исчерпан. Попробую обычный подбор без интернета.")
     if not result.books:
-        await _edit_progress(progress, "Я не нашёл достаточно совпадений в каталоге. Попробую обычный поиск.")
+        await _edit_progress(progress, "Я нашёл идеи по теме, но не смог сопоставить их с книгами в каталоге. К сожалению, ничего подходящего не нашлось.")
         return False
     source = "интернет + библиотека" if result.used_web else "модель + библиотека"
     lines = [
-        "<b>Подборка</b>",
+        "<b>Нашёл один подходящий вариант</b>" if len(result.books) == 1 else "<b>Подборка</b>",
         f"Запрос: <b>{escape(query)}</b>",
         f"Источник: {source}",
         "",
-        "Я показываю только книги, которые удалось найти в каталоге.",
+        "Я проверил идеи из интернета и показываю только то, что нашлось в каталоге." if result.used_web else "Я показываю только книги, которые удалось найти в каталоге.",
         "",
     ]
     for index, book in enumerate(result.books, start=1):
