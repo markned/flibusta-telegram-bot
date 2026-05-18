@@ -30,7 +30,7 @@ from aiogram.types import User
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import Settings
-from app.flibusta import AuthorResult, FlibustaClient, FlibustaError
+from app.flibusta import AuthorResult, FlibustaClient, FlibustaError, SearchResult
 from app.handlers.kindle import build_kindle_router, user_message_for_exception
 from app.handlers.admin import build_admin_router
 from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
@@ -53,6 +53,10 @@ from app.services.ai_assistant import AiAssistant
 from app.services.recommendation_packs import get_recommendation_pack
 from app.services.recommendation_filters import is_bad_recommendation_candidate
 from app.services.recommendations import merge_recommendation_queries
+from app.services.discovery.idea_generator import BookIdeaGenerator
+from app.services.discovery.flibusta_matcher import FlibustaMatcher
+from app.services.discovery.recommender import DiscoveryRateLimiter, DiscoveryRecommender
+from app.services.discovery.web_search import DisabledWebSearchProvider, TavilyWebSearchProvider
 from app.middlewares.access import AccessMiddleware
 from app.state import (
     AuthorSession,
@@ -160,6 +164,23 @@ kindle_queue = KindleQueue(
 )
 ai_assistant = AiAssistant(settings.openai_api_key, settings.ai_model, settings.ai_enabled,cache_repo=cache_repo,cache_ttl_seconds=settings.ai_intent_cache_ttl_seconds)
 
+_web_provider = TavilyWebSearchProvider(settings.discovery_web_api_key, timeout_seconds=settings.discovery_timeout_seconds, max_snippet_chars=settings.discovery_max_web_snippet_chars) if settings.discovery_web_provider == "tavily" and settings.discovery_web_api_key else DisabledWebSearchProvider()
+discovery_recommender = DiscoveryRecommender(
+    flibusta=flibusta,
+    cache_repo=cache_repo,
+    idea_generator=BookIdeaGenerator(settings.openai_api_key, settings.discovery_model or settings.ai_model, settings.ai_enabled, cache_repo=cache_repo, cache_ttl_seconds=settings.discovery_cache_ttl_seconds, max_ideas=settings.discovery_max_book_ideas, timeout_seconds=settings.discovery_timeout_seconds),
+    matcher=FlibustaMatcher(flibusta, max_checks=settings.discovery_max_flibusta_checks, max_final_results=settings.discovery_max_final_results),
+    web_provider=_web_provider,
+    favorites_repo=favorites_repo,
+    history_repo=download_history_repo,
+    preferences_repo=user_preferences_repo,
+    cache_ttl_seconds=settings.discovery_cache_ttl_seconds,
+    max_web_results=settings.discovery_max_web_results,
+    web_enabled=settings.discovery_enabled and settings.discovery_use_web and settings.discovery_web_provider == "tavily" and bool(settings.discovery_web_api_key),
+    rate_limiter=DiscoveryRateLimiter(settings.discovery_user_daily_limit, settings.discovery_global_daily_limit),
+    concurrency=settings.discovery_concurrency,
+)
+
 
 @router.message(Command("start"))
 async def start(message: Message, command: CommandObject) -> None:
@@ -222,6 +243,32 @@ async def recommend_command(message: Message, command: CommandObject) -> None:
     query=(command.args or "").strip()
     if not query:
         await message.answer("Опиши книгу, автора или настроение — я сам разберу запрос.")
+        return
+    if await send_discovery_results(message, query, mode="recommend", use_web=False):
+        return
+    await send_ai_results(message, query)
+
+@router.message(Command("discover"))
+async def discover_command(message: Message, command: CommandObject) -> None:
+    query=(command.args or "").strip()
+    if not query:
+        await message.answer("Напиши тему после команды: /discover немецкий постмодерн")
+        return
+    use_web=settings.discovery_enabled and settings.discovery_use_web
+    if await send_discovery_results(message, query, mode="discover", use_web=use_web):
+        return
+    await send_smart_results(message, query)
+
+@router.message(Command("discover_web"))
+async def discover_web_command(message: Message, command: CommandObject) -> None:
+    query=(command.args or "").strip()
+    if not query:
+        await message.answer("Напиши тему после команды: /discover_web антиутопия")
+        return
+    configured=settings.discovery_enabled and settings.discovery_use_web and settings.discovery_web_provider == "tavily" and bool(settings.discovery_web_api_key)
+    if not configured:
+        await message.answer("Веб-подборки сейчас не настроены. Попробую без интернета.")
+    if await send_discovery_results(message, query, mode="discover_web", use_web=configured):
         return
     await send_ai_results(message, query)
 
@@ -287,6 +334,22 @@ async def admin_cache_clear(message: Message, command: CommandObject) -> None:
     if message.from_user.id not in settings.admin_ids: return
     deleted = await cache_repo.clear(all_rows=(command.args or "").strip().lower()=="all")
     await message.answer(f"Deleted {deleted} cache rows.")
+
+@router.message(Command("admin_discovery_status"))
+async def admin_discovery_status(message: Message) -> None:
+    if message.from_user.id not in settings.admin_ids: return
+    total, by_type, _ = await cache_repo.stats()
+    discovery_rows = sum(count for kind, count in by_type.items() if kind.startswith("discovery_"))
+    await message.answer(
+        "<b>Discovery</b>\n"
+        f"enabled: {'yes' if settings.discovery_enabled else 'no'}\n"
+        f"web enabled: {'yes' if settings.discovery_use_web else 'no'}\n"
+        f"provider: {escape(settings.discovery_web_provider)}\n"
+        f"api key present: {'yes' if bool(settings.discovery_web_api_key) else 'no'}\n"
+        f"max web results: {settings.discovery_max_web_results}\n"
+        f"daily limits: {settings.discovery_user_daily_limit}/{settings.discovery_global_daily_limit}\n"
+        f"discovery cache rows: {discovery_rows}"
+    )
 
 @router.message(Command("admin_stats"))
 async def admin_stats(message: Message) -> None:
@@ -1060,6 +1123,41 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
         await _send_no_results(message, query)
     return False
 
+async def send_discovery_results(message: Message, query: str, *, mode: str, use_web: bool) -> bool:
+    if not settings.discovery_enabled:
+        return False
+    progress = await message.answer("Собираю идеи и проверяю каталог…")
+    result = await discovery_recommender.recommend(message.from_user.id, query, mode, use_web)
+    if result.note == "web_rate_limited":
+        await _edit_progress(progress, "Лимит веб-подборок на сегодня исчерпан. Попробую обычный подбор без интернета.")
+    if not result.books:
+        await _edit_progress(progress, "Я не нашёл достаточно совпадений в каталоге. Попробую обычный поиск.")
+        return False
+    source = "интернет + библиотека" if use_web and result.note != "web_rate_limited" else "модель + библиотека"
+    lines = [
+        "<b>Подборка</b>",
+        f"Запрос: <b>{escape(query)}</b>",
+        f"Источник: {source}",
+        "",
+        "Я показываю только книги, которые удалось найти в каталоге.",
+        "",
+    ]
+    for index, book in enumerate(result.books, start=1):
+        lines.append(f"{index}. <b>{escape(book.title)}</b> — {escape(book.author or 'автор не указан')}")
+        if book.reason:
+            lines.append(f"Почему: {escape(book.reason[:180])}")
+    books = [SearchResult(item.book_id, item.title, item.author) for item in result.books]
+    session = _create_search_session(
+        message.from_user.id,
+        message.chat.id,
+        query,
+        books,
+        title=f"<b>Подборка</b>\nПо запросу: <b>{escape(query)}</b>",
+    )
+    await _edit_progress(progress, "Подборка готова.")
+    await message.answer("\n".join(lines), reply_markup=_search_results_keyboard(session))
+    return True
+
 async def send_ai_results(message: Message, query: str) -> None:
     progress = await message.answer("Разбираю запрос…")
     analysis = analyze_query(query)
@@ -1365,6 +1463,8 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="search", description="поиск книг"),
             BotCommand(command="author", description="поиск авторов"),
             BotCommand(command="recommend", description="подобрать книгу"),
+            BotCommand(command="discover", description="подборка с веб-поиском"),
+            BotCommand(command="discover_web", description="явный веб-поиск"),
             BotCommand(command="kindle_email", description="сохранить Kindle e-mail"),
             BotCommand(command="kindle_help", description="настройка Send to Kindle"),
             BotCommand(command="kindle_setup", description="настройка Kindle"),

@@ -61,6 +61,21 @@ class Settings(BaseSettings):
     ai_recommendation_min_results: int = Field(default=5, alias="AI_RECOMMENDATION_MIN_RESULTS")
     ai_recommendation_max_details: int = Field(default=6, alias="AI_RECOMMENDATION_MAX_DETAILS")
     ai_recommendation_books_per_query: int = Field(default=3, alias="AI_RECOMMENDATION_BOOKS_PER_QUERY")
+    discovery_enabled: bool = Field(default=True, alias="DISCOVERY_ENABLED")
+    discovery_use_web: bool = Field(default=False, alias="DISCOVERY_USE_WEB")
+    discovery_web_provider: str = Field(default="disabled", alias="DISCOVERY_WEB_PROVIDER")
+    discovery_web_api_key: str | None = Field(default=None, alias="DISCOVERY_WEB_API_KEY")
+    discovery_max_web_results: int = Field(default=5, alias="DISCOVERY_MAX_WEB_RESULTS")
+    discovery_max_web_snippet_chars: int = Field(default=500, alias="DISCOVERY_MAX_WEB_SNIPPET_CHARS")
+    discovery_max_book_ideas: int = Field(default=12, alias="DISCOVERY_MAX_BOOK_IDEAS")
+    discovery_max_flibusta_checks: int = Field(default=8, alias="DISCOVERY_MAX_FLIBUSTA_CHECKS")
+    discovery_max_final_results: int = Field(default=10, alias="DISCOVERY_MAX_FINAL_RESULTS")
+    discovery_cache_ttl_seconds: int = Field(default=604800, alias="DISCOVERY_CACHE_TTL_SECONDS")
+    discovery_user_daily_limit: int = Field(default=5, alias="DISCOVERY_USER_DAILY_LIMIT")
+    discovery_global_daily_limit: int = Field(default=50, alias="DISCOVERY_GLOBAL_DAILY_LIMIT")
+    discovery_concurrency: int = Field(default=1, alias="DISCOVERY_CONCURRENCY")
+    discovery_model: str | None = Field(default=None, alias="DISCOVERY_MODEL")
+    discovery_timeout_seconds: float = Field(default=15, alias="DISCOVERY_TIMEOUT_SECONDS")
 
     @property
     def base_url(self) -> str:
