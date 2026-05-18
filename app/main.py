@@ -61,14 +61,10 @@ if settings.log_level.upper() != "DEBUG":
     logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 T = TypeVar("T")
-BOOK_SEARCH_BUTTON = "📚 Поиск книги"
-AUTHOR_SEARCH_BUTTON = "👤 Поиск автора"
-HELP_BUTTON = "ℹ️ Как пользоваться"
-RECOMMEND_BUTTON = "🤖 Подобрать книгу"
-BOOK_MODE = "book"
-AUTHOR_MODE = "author"
-SMART_MODE = "smart"
-AI_MODE = "ai"
+FAVORITES_BUTTON = "⭐ Избранное"
+HISTORY_BUTTON = "🕘 История"
+LAST_BUTTON = "📚 Последняя"
+KINDLE_BUTTON = "⚙️ Kindle"
 
 router = Router()
 
@@ -96,7 +92,6 @@ class AuthorSession:
 
 search_sessions: dict[str, SearchSession] = {}
 author_sessions: dict[str, AuthorSession] = {}
-user_search_modes: dict[int, str] = {}
 retry_sessions: dict[str, str] = {}
 search_timestamps: dict[int, list[float]] = {}
 
@@ -177,15 +172,13 @@ async def start(message: Message, command: CommandObject) -> None:
         if existing.status != "approved":
             await message.answer("Запрос уже отправлен. Я сообщу, когда админ откроет доступ.")
             return
-    if message.from_user:
-        user_search_modes[message.from_user.id] = SMART_MODE
     await telegram_retry(
         lambda: message.answer(
-            "Что ищем?\n\n"
-            "Можно просто написать запрос — я сам попробую понять, это книга или автор.\n"
-            "Если хочешь явно выбрать режим, нажми <b>📚 Поиск книги</b> или "
-            "<b>👤 Поиск автора</b>.\n\n"
-            "Кнопки снизу всегда доступны.",
+            "Что хочется почитать?\n\n"
+            "Напиши название, автора или просто опиши книгу:\n"
+            "«Дюна»\n"
+            "«Пелевин»\n"
+            "«что-то как 1984, но современнее»",
             reply_markup=main_reply_keyboard(),
         )
     )
@@ -215,36 +208,10 @@ async def author_command(message: Message, command: CommandObject) -> None:
     await send_author_results(message, query)
 
 
-@router.message(Command("mode"))
-async def mode_command(message: Message, command: CommandObject) -> None:
-    mode = (command.args or "").strip().lower()
-    if mode in {"book", "books", "книга", "книги"}:
-        if message.from_user:
-            user_search_modes[message.from_user.id] = BOOK_MODE
-        await telegram_retry(lambda: message.answer("Режим: поиск книги.", reply_markup=main_reply_keyboard()))
-        return
-
-    if mode in {"author", "authors", "автор", "авторы"}:
-        if message.from_user:
-            user_search_modes[message.from_user.id] = AUTHOR_MODE
-        await telegram_retry(lambda: message.answer("Режим: поиск автора.", reply_markup=main_reply_keyboard()))
-        return
-
-    current_mode = user_search_modes.get(message.from_user.id if message.from_user else 0, BOOK_MODE)
-    current_text = "поиск автора" if current_mode == AUTHOR_MODE else "поиск книги"
-    await telegram_retry(
-        lambda: message.answer(
-            f"Сейчас: {current_text}.\n"
-            "Используй /mode book или /mode author.",
-            reply_markup=main_reply_keyboard(),
-        )
-    )
-
 @router.message(Command("recommend"))
 async def recommend_command(message: Message, command: CommandObject) -> None:
     query=(command.args or "").strip()
     if not query:
-        user_search_modes[message.from_user.id]=AI_MODE
         await message.answer("Опиши, что хочется почитать: настроение, похожую книгу или автора.")
         return
     await send_ai_results(message, query)
@@ -338,48 +305,16 @@ async def search_text(message: Message) -> None:
     if text.startswith("/"):
         return
 
-    if text == BOOK_SEARCH_BUTTON:
-        if message.from_user:
-            user_search_modes[message.from_user.id] = BOOK_MODE
-        await telegram_retry(
-            lambda: message.answer("Напиши название книги.", reply_markup=main_reply_keyboard())
-        )
+    if text == FAVORITES_BUTTON:
+        await favorites_command(message); return
+    if text == HISTORY_BUTTON:
+        await history_command(message); return
+    if text == LAST_BUTTON:
+        await last_command(message); return
+    if text == KINDLE_BUTTON:
+        await message.answer("Kindle: /kindle_setup · /kindle_status · /kindle_history")
         return
-
-    if text == AUTHOR_SEARCH_BUTTON:
-        if message.from_user:
-            user_search_modes[message.from_user.id] = AUTHOR_MODE
-        await telegram_retry(lambda: message.answer("Напиши имя автора.", reply_markup=main_reply_keyboard()))
-        return
-
-    if text == HELP_BUTTON:
-        await telegram_retry(
-            lambda: message.answer(
-                "1. Выбери, что ищешь: книгу или автора.\n"
-                "2. Или просто напиши запрос — я попробую понять сам.\n"
-                "3. Открой карточку и выбери формат для скачивания.\n\n"
-                "Команды тоже работают: /search и /author.",
-                reply_markup=main_reply_keyboard(),
-            )
-        )
-        return
-    if text == RECOMMEND_BUTTON:
-        if message.from_user: user_search_modes[message.from_user.id]=AI_MODE
-        await message.answer("Опиши, что хочется почитать: «как Дюна, но короче» или «мрачную фантастику без подростковости».")
-        return
-
-    mode = user_search_modes.get(message.from_user.id if message.from_user else 0, SMART_MODE)
-    if mode == AUTHOR_MODE:
-        await send_author_results(message, text)
-        return
-    if mode == SMART_MODE:
-        await send_smart_results(message, text)
-        return
-    if mode == AI_MODE:
-        await send_ai_results(message, text)
-        return
-
-    await send_search_results(message, text)
+    await send_ai_results(message, text)
 
 
 @router.callback_query(F.data.startswith("book:"))
@@ -1404,15 +1339,17 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [
-                KeyboardButton(text=BOOK_SEARCH_BUTTON),
-                KeyboardButton(text=AUTHOR_SEARCH_BUTTON),
+                KeyboardButton(text=FAVORITES_BUTTON),
+                KeyboardButton(text=HISTORY_BUTTON),
             ],
-            [KeyboardButton(text=RECOMMEND_BUTTON)],
-            [KeyboardButton(text=HELP_BUTTON)],
+            [
+                KeyboardButton(text=LAST_BUTTON),
+                KeyboardButton(text=KINDLE_BUTTON),
+            ],
         ],
         resize_keyboard=True,
         is_persistent=True,
-        input_field_placeholder="Название книги или автор",
+        input_field_placeholder="Книга, автор или что хочется почитать",
     )
 
 
@@ -1549,7 +1486,6 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="search", description="поиск книг"),
             BotCommand(command="author", description="поиск авторов"),
             BotCommand(command="recommend", description="подобрать книгу"),
-            BotCommand(command="mode", description="переключить режим"),
             BotCommand(command="kindle_email", description="сохранить Kindle e-mail"),
             BotCommand(command="kindle_help", description="настройка Send to Kindle"),
             BotCommand(command="kindle_setup", description="настройка Kindle"),
