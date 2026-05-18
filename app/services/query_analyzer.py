@@ -22,6 +22,8 @@ def analyze_query(query:str,max_words:int=12)->QueryAnalysis:
    if _looks_person(left): author,title=left.strip(),right.strip()
    elif _looks_person(right): author,title=right.strip(),left.strip()
    break
+ if author is None and title is None and len(kept) >= 3 and _looks_person(' '.join(kept[:2])):
+  author=' '.join(kept[:2]); title=' '.join(kept[2:])
  likely=_looks_person(cleaned) and not quoted
  has_marker=bool(re.search(r'\b(?:18|19|20)\d{2}\b|#\d+|\bкн\.?\s*\d+',cleaned,re.I))
  return QueryAnalysis(original,cleaned,quoted,likely,hint,author,title,has_marker)

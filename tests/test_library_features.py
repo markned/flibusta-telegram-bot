@@ -119,3 +119,7 @@ def test_recommendation_details_text_includes_short_descriptions():
  details=BookDetails(book_id='1',title='Книга',authors=['Автор'],author_refs=[],translators=[],illustrators=[],genres=[],file_size=None,pages=None,annotation='Очень длинное описание книги. '*20,formats=[],page_url='x')
  text=recommendation_details_text('запрос',[(book,details)])
  assert '<b>1. Книга</b>' in text and 'Автор' in text and '…' in text
+
+def test_query_analysis_author_title_without_separator():
+ a=analyze_query('Лев Толстой исповедь')
+ assert a.author_part=='Лев Толстой' and a.title_part=='исповедь'

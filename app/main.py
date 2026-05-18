@@ -319,6 +319,10 @@ async def search_text(message: Message) -> None:
         await last_command(message); return
     if text == KINDLE_BUTTON:
         return
+    analysis = analyze_query(text)
+    if analysis.author_part and analysis.title_part:
+        if await send_author_title_results(message, analysis.author_part, analysis.title_part):
+            return
     await send_ai_results(message, text)
 
 
@@ -829,6 +833,33 @@ async def send_search_results(message: Message, query: str) -> None:
         pages=total_pages(len(results)),
         duration=elapsed(started_at),
     )
+
+async def send_author_title_results(message: Message, author: str, title: str) -> bool:
+    """Fast path for obvious 'author + title' queries like 'Лев Толстой исповедь'."""
+    try:
+        results = _rank_and_dedupe_books(
+            await flibusta.search(_clean_query(title), limit=settings.search_results_limit),
+            title,
+        )
+    except FlibustaError:
+        return False
+    author_norm = _norm(author)
+    surname = _norm(author.split()[-1])
+    matched = [
+        item for item in results
+        if item.author and (author_norm in _norm(item.author) or surname in _norm(item.author))
+    ]
+    if not matched:
+        return False
+    session = _create_search_session(
+        message.from_user.id,
+        message.chat.id,
+        f"{author} {title}",
+        matched,
+        title=f"<b>Книги</b>\nПо запросу: <b>{escape(author)} {escape(title)}</b>",
+    )
+    await message.answer(_search_results_text(session), reply_markup=_search_results_keyboard(session))
+    return True
     await telegram_retry(
         lambda: message.answer(
             _search_results_text(session),
