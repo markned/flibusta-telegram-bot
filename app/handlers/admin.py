@@ -40,14 +40,14 @@ def build_admin_router(*,access_repo:AccessRepository,cache_repo:CacheRepository
  async def users_cb(c:CallbackQuery):
   if c.from_user.id not in admin_ids:return
   await c.answer(); status='pending' if c.data=='admin_pending' else None; users=await access_repo.list_users(status=status,limit=10)
-  lines=['<b>Заявки</b>' if status else '<b>Пользователи</b>']
+  lines=['<b>Заявки на доступ</b>' if status else '<b>Пользователи</b>']
   kb=InlineKeyboardBuilder()
   for u in users:
    label=(u.full_name or u.username or str(u.user_id))[:30]; lines.append(f"{u.user_id} — {escape(label)} — {u.status}")
    if u.status=='pending': kb.row(InlineKeyboardButton(text=f'✅ {label}',callback_data=f'admin_user_approve:{u.user_id}'),InlineKeyboardButton(text='❌',callback_data=f'admin_user_block:{u.user_id}'))
    else: kb.row(InlineKeyboardButton(text=f'🚫 {label}',callback_data=f'admin_user_block:{u.user_id}'),InlineKeyboardButton(text='🗑',callback_data=f'admin_user_delete:{u.user_id}'))
   kb.row(InlineKeyboardButton(text='← Админка',callback_data='admin_home'))
-  await c.message.edit_text('\n'.join(lines) if users else 'Пока пусто.',reply_markup=kb.as_markup())
+  await c.message.edit_text('\n'.join(lines) if users else '<b>Пользователи</b>\n\nПока пусто.',reply_markup=kb.as_markup())
  @router.message(Command('admin_user_add'))
  async def user_add(m:Message,command:CommandObject):
   if not is_admin(m):return

@@ -160,22 +160,22 @@ async def start(message: Message, command: CommandObject) -> None:
         existing = await access_repo.get_user(message.from_user.id)
         arg = (command.args or "").strip()
         if arg.startswith("invite_") and await access_repo.redeem_invite(arg.removeprefix("invite_"), message.from_user.id, message.from_user.username, message.from_user.full_name):
-            await message.answer("Приглашение принято. Добро пожаловать.", reply_markup=main_reply_keyboard())
+            await message.answer("Приглашение принято. Добро пожаловать в библиотеку.", reply_markup=main_reply_keyboard())
             return
         if existing and existing.status == "blocked":
-            await message.answer("Доступ не открыт.")
+            await message.answer("Доступ к библиотеке не открыт.")
             return
         if existing is None:
             await access_repo.request_access(message.from_user.id, message.from_user.username, message.from_user.full_name)
             await _notify_admins_about_request(message.bot, message.from_user)
-            await message.answer("Доступ по приглашению. Я отправил запрос администратору — напишу, когда он откроет вход.")
+            await message.answer("Доступ по приглашению.\n\nЯ отправил запрос администратору и напишу, когда вход откроют.")
             return
         if existing.status != "approved":
-            await message.answer("Запрос уже отправлен. Я сообщу, когда админ откроет доступ.")
+            await message.answer("Запрос уже отправлен.\n\nЯ сообщу, когда администратор откроет доступ.")
             return
     await telegram_retry(
         lambda: message.answer(
-            "Что хочется почитать?\n\n"
+            "<b>Библиотека</b>\n\nЧто хочется почитать?\n\n"
             "Напиши название, автора или просто опиши книгу:\n"
             "«Дюна»\n"
             "«Пелевин»\n"
@@ -213,7 +213,7 @@ async def author_command(message: Message, command: CommandObject) -> None:
 async def recommend_command(message: Message, command: CommandObject) -> None:
     query=(command.args or "").strip()
     if not query:
-        await message.answer("Опиши, что хочется почитать: настроение, похожую книгу или автора.")
+        await message.answer("Опиши книгу, автора или настроение — я сам разберу запрос.")
         return
     await send_ai_results(message, query)
 
@@ -258,14 +258,14 @@ async def history_failed_command(message: Message) -> None:
 async def last_command(message: Message) -> None:
     item = await last_books_repo.get(message.from_user.id)
     if item is None:
-        await message.answer("Пока нет последней книги. Открой любую карточку — и она появится здесь.")
+        await message.answer("<b>Последняя книга</b>\n\nПока пусто. Открой любую карточку — и она появится здесь.")
         return
     preferred = await _preferred_format(message.from_user.id) or "epub"
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Открыть карточку", callback_data=f"book:{item.book_id}"))
     kb.row(InlineKeyboardButton(text=f"Скачать {preferred.upper()}", callback_data=f"dl:{item.book_id}:{preferred}"), InlineKeyboardButton(text="📤 Kindle", callback_data=f"kindle:{item.book_id}"))
     kb.row(InlineKeyboardButton(text="⭐ В избранное", callback_data=f"fav_add:{item.book_id}"))
-    await message.answer(f"Последняя книга:\n<b>{escape(item.title)}</b>" + (f"\n{escape(item.author)}" if item.author else ""), reply_markup=kb.as_markup())
+    await message.answer(f"<b>Последняя книга</b>\n\n<b>{escape(item.title)}</b>" + (f"\n{escape(item.author)}" if item.author else ""), reply_markup=kb.as_markup())
 
 @router.message(Command("admin_cache_stats"))
 async def admin_cache_stats(message: Message) -> None:
@@ -444,7 +444,7 @@ async def paginate_search(callback: CallbackQuery) -> None:
     session = search_sessions.get(session_id)
     if session is None:
         await callback_answer(callback)
-        await telegram_retry(lambda: callback.message.answer("Поиск устарел. Запусти его еще раз."))
+        await telegram_retry(lambda: callback.message.answer("Эта выдача уже устарела. Отправь запрос ещё раз."))
         return
 
     if callback.from_user.id != session.user_id or callback.message.chat.id != session.chat_id:
@@ -455,13 +455,13 @@ async def paginate_search(callback: CallbackQuery) -> None:
         page = int(page_raw)
     except ValueError:
         await callback_answer(callback)
-        await telegram_retry(lambda: callback.message.answer("Некорректная страница выдачи."))
+        await telegram_retry(lambda: callback.message.answer("Не смог открыть эту страницу выдачи."))
         return
 
     page_count = total_pages(len(session.results))
     if page < 0 or page >= page_count:
         await callback_answer(callback)
-        await telegram_retry(lambda: callback.message.answer("Такой страницы выдачи нет."))
+        await telegram_retry(lambda: callback.message.answer("Такой страницы уже нет."))
         return
 
     updated = SearchSession(
@@ -498,7 +498,7 @@ async def paginate_authors(callback: CallbackQuery) -> None:
     session = author_sessions.get(session_id)
     if session is None:
         await callback_answer(callback)
-        await telegram_retry(lambda: callback.message.answer("Поиск авторов устарел. Запусти его еще раз."))
+        await telegram_retry(lambda: callback.message.answer("Эта выдача авторов уже устарела. Отправь запрос ещё раз."))
         return
 
     if callback.from_user.id != session.user_id or callback.message.chat.id != session.chat_id:
@@ -509,13 +509,13 @@ async def paginate_authors(callback: CallbackQuery) -> None:
         page = int(page_raw)
     except ValueError:
         await callback_answer(callback)
-        await telegram_retry(lambda: callback.message.answer("Некорректная страница авторов."))
+        await telegram_retry(lambda: callback.message.answer("Не смог открыть эту страницу авторов."))
         return
 
     page_count = total_pages(len(session.authors))
     if page < 0 or page >= page_count:
         await callback_answer(callback)
-        await telegram_retry(lambda: callback.message.answer("Такой страницы авторов нет."))
+        await telegram_retry(lambda: callback.message.answer("Такой страницы уже нет."))
         return
 
     updated = AuthorSession(
@@ -551,7 +551,7 @@ async def show_author_books(callback: CallbackQuery) -> None:
 
     author_session = author_sessions.get(session_id)
     if author_session is None:
-        await telegram_retry(lambda: callback.message.answer("Поиск авторов устарел. Запусти его еще раз."))
+        await telegram_retry(lambda: callback.message.answer("Эта выдача авторов уже устарела. Отправь запрос ещё раз."))
         return
 
     if callback.from_user.id != author_session.user_id or callback.message.chat.id != author_session.chat_id:
@@ -645,7 +645,7 @@ async def download_book(callback: CallbackQuery) -> None:
     log_user_action(callback.from_user, callback.message.chat.id, "download_start", book_id=book_id, fmt=fmt)
     await callback_answer(callback, "Скачиваю...")
     status_message = await telegram_retry(
-        lambda: callback.message.answer(f"Скачиваю {escape(fmt.upper())}...")
+            lambda: callback.message.answer(f"Скачиваю {escape(fmt.upper())}…")
     )
 
     if callback.from_user.id not in settings.admin_ids and await download_history_repo.count_recent_downloads(callback.from_user.id) >= settings.download_rate_limit_per_hour:
@@ -727,11 +727,11 @@ async def download_book(callback: CallbackQuery) -> None:
     )
     if isinstance(status_message, Message):
         await telegram_retry(
-            lambda: status_message.edit_text(f"Файл скачан ({size_mb:.1f} МБ), отправляю в Telegram...")
+            lambda: status_message.edit_text(f"Файл скачан ({size_mb:.1f} МБ). Отправляю в Telegram…")
         )
     else:
         await telegram_retry(
-            lambda: callback.message.answer(f"Файл скачан ({size_mb:.1f} МБ), отправляю в Telegram...")
+            lambda: callback.message.answer(f"Файл скачан ({size_mb:.1f} МБ). Отправляю в Telegram…")
         )
 
     sent = await telegram_retry(
@@ -773,7 +773,7 @@ async def download_book(callback: CallbackQuery) -> None:
 
 async def send_search_results(message: Message, query: str) -> None:
     if not _allow_search(message.from_user.id):
-        await telegram_retry(lambda: message.answer("Слишком много поисков. Подожди немного и попробуй снова."))
+        await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
         return
     started_at = monotonic()
     log_user_action(message.from_user, message.chat.id, "search_start", query=query)
@@ -834,7 +834,7 @@ async def send_search_results(message: Message, query: str) -> None:
 
 async def send_author_results(message: Message, query: str) -> None:
     if not _allow_search(message.from_user.id):
-        await telegram_retry(lambda: message.answer("Слишком много поисков. Подожди немного и попробуй снова."))
+        await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
         return
     started_at = monotonic()
     log_user_action(message.from_user, message.chat.id, "author_search_start", query=query)
@@ -894,7 +894,7 @@ async def send_author_results(message: Message, query: str) -> None:
 
 async def send_smart_results(message: Message, query: str) -> None:
     if not _allow_search(message.from_user.id):
-        await telegram_retry(lambda: message.answer("Слишком много поисков. Подожди немного и попробуй снова."))
+        await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
         return
     started_at = monotonic()
     analysis = analyze_query(query)
@@ -1121,7 +1121,7 @@ def _search_results_text(session: SearchSession, title: str | None = None) -> st
     page_count = total_pages(total_results)
     start = session.page * SEARCH_PAGE_SIZE + 1
     end = min(total_results, (session.page + 1) * SEARCH_PAGE_SIZE)
-    heading = title or session.title or f"Нашел варианты по запросу: <b>{escape(session.query)}</b>"
+    heading = title or session.title or f"<b>Книги</b>\nПо запросу: <b>{escape(session.query)}</b>"
     return (
         f"{heading}\n"
         f"Показаны {start}-{end} из {total_results}. Страница {session.page + 1}/{page_count}."
@@ -1169,7 +1169,7 @@ def _author_results_text(session: AuthorSession) -> str:
     start = session.page * SEARCH_PAGE_SIZE + 1
     end = min(total_results, (session.page + 1) * SEARCH_PAGE_SIZE)
     return (
-        f"Нашел авторов по запросу: <b>{escape(session.query)}</b>\n"
+        f"<b>Авторы</b>\nПо запросу: <b>{escape(session.query)}</b>\n"
         f"Показаны {start}-{end} из {total_results}. Страница {session.page + 1}/{page_count}."
     )
 
@@ -1440,7 +1440,7 @@ async def _send_no_results(message: Message, query: str) -> None:
 def _combined_results_text(query,books,authors):
     book_lines="\\n".join(f"• {escape(b.title)}" + (f" — {escape(b.author)}" if b.author else "") for b in books[:5])
     author_lines="\\n".join(f"• {escape(a.name)}" for a in authors[:5])
-    return f"Нашёл книги и авторов по запросу: <b>{escape(query)}</b>\\n\\n<b>Книги</b>\\n{book_lines}\\n\\n<b>Авторы</b>\\n{author_lines}"
+    return f"<b>Нашёл варианты</b>\\nПо запросу: <b>{escape(query)}</b>\\n\\n<b>Книги</b>\\n{book_lines}\\n\\n<b>Авторы</b>\\n{author_lines}"
 
 def _combined_results_keyboard(book_session,author_session):
     kb=InlineKeyboardBuilder()
@@ -1452,7 +1452,7 @@ def _combined_results_keyboard(book_session,author_session):
 async def _send_favorites_page(message: Message, user_id: int, page: int, edit: bool=False):
     items=await favorites_repo.list(user_id,limit=8,offset=page*8); count=await favorites_repo.count(user_id)
     if not items:
-        await (message.edit_text("Избранное пока пустое.") if edit else message.answer("Избранное пока пустое.")); return
+        await (message.edit_text("<b>Избранное</b>\\n\\nПока пусто.") if edit else message.answer("<b>Избранное</b>\\n\\nПока пусто.")); return
     kb=InlineKeyboardBuilder()
     for item in items:
         kb.row(InlineKeyboardButton(text=(item.title if not item.author else f"{item.title} — {item.author}")[:64],callback_data=f"book:{item.book_id}"),InlineKeyboardButton(text="✕",callback_data=f"fav_remove:{item.book_id}"))
@@ -1460,12 +1460,12 @@ async def _send_favorites_page(message: Message, user_id: int, page: int, edit: 
     if page>0: nav.append(InlineKeyboardButton(text="<<",callback_data=f"fav_page:{page-1}"))
     if (page+1)*8<count: nav.append(InlineKeyboardButton(text=">>",callback_data=f"fav_page:{page+1}"))
     if nav: kb.row(*nav)
-    text=f"Избранное: {count}"
+    text=f"<b>Избранное</b>\\n\\nКниг: {count}"
     await (message.edit_text(text,reply_markup=kb.as_markup()) if edit else message.answer(text,reply_markup=kb.as_markup()))
 
 def _history_text(items:list[DownloadHistoryItem],failed:bool=False)->str:
-    if not items: return "Неудачных попыток пока нет." if failed else "История пока пустая."
-    head="Последние неудачные попытки:" if failed else "Последние отправки:"
+    if not items: return "<b>Неудачные отправки</b>\\n\\nПока пусто." if failed else "<b>История</b>\\n\\nПока пусто."
+    head="<b>Неудачные отправки</b>" if failed else "<b>История</b>"
     lines=[head]
     for item in items:
         lines.append(f"{item.created_at[:16]} — {item.title or item.book_id} [{item.format}] → {item.delivery_target}" + (f" ({item.error})" if failed and item.error else ""))
