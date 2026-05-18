@@ -4,9 +4,10 @@ import logging
 import re
 from asyncio import sleep
 from dataclasses import dataclass
+from datetime import datetime
 from html import escape
 from pathlib import Path
-from time import monotonic
+from time import monotonic, time
 from typing import Awaitable, Callable, TypeVar
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -37,10 +38,19 @@ from app.repositories.db import Database
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository
 from app.repositories.kindle_settings import KindleSettingsRepository
 from app.repositories.user_preferences import UserPreferencesRepository
+from app.repositories.cache import CacheRepository
+from app.repositories.favorites import FavoritesRepository
+from app.repositories.download_history import DownloadHistoryRepository, DownloadHistoryItem
+from app.repositories.last_books import LastBooksRepository
+from app.repositories.access import AccessRepository
 from app.services.email_sender import EmailSender
 from app.services.conversion import ConversionService
 from app.services.kindle import KindleService
 from app.services.kindle_queue import KindleQueue
+from app.services.cached_flibusta import CachedFlibustaClient
+from app.services.query_analyzer import analyze_query
+from app.services.ai_assistant import AiAssistant
+from app.middlewares.access import AccessMiddleware
 
 settings = Settings()
 logging.basicConfig(
@@ -54,9 +64,11 @@ T = TypeVar("T")
 BOOK_SEARCH_BUTTON = "📚 Поиск книги"
 AUTHOR_SEARCH_BUTTON = "👤 Поиск автора"
 HELP_BUTTON = "ℹ️ Как пользоваться"
+RECOMMEND_BUTTON = "🤖 Подобрать книгу"
 BOOK_MODE = "book"
 AUTHOR_MODE = "author"
 SMART_MODE = "smart"
+AI_MODE = "ai"
 
 router = Router()
 
@@ -85,8 +97,10 @@ class AuthorSession:
 search_sessions: dict[str, SearchSession] = {}
 author_sessions: dict[str, AuthorSession] = {}
 user_search_modes: dict[int, str] = {}
+retry_sessions: dict[str, str] = {}
+search_timestamps: dict[int, list[float]] = {}
 
-flibusta = FlibustaClient(
+raw_flibusta = FlibustaClient(
     settings.base_url,
     timeout=settings.request_timeout_seconds,
     proxy=settings.normalized_http_proxy,
@@ -95,6 +109,18 @@ flibusta = FlibustaClient(
     max_redirects=settings.flibusta_max_redirects,
 )
 db = Database(settings.database_path)
+cache_repo = CacheRepository(db)
+favorites_repo = FavoritesRepository(db)
+download_history_repo = DownloadHistoryRepository(db)
+last_books_repo = LastBooksRepository(db)
+access_repo = AccessRepository(db)
+flibusta = CachedFlibustaClient(raw_flibusta, cache_repo, enabled=settings.cache_enabled, ttls={
+    "book_search": settings.cache_book_search_ttl_seconds,
+    "author_search": settings.cache_author_search_ttl_seconds,
+    "smart_search": settings.cache_smart_search_ttl_seconds,
+    "book_details": settings.cache_book_details_ttl_seconds,
+    "author_books": settings.cache_author_books_ttl_seconds,
+})
 kindle_settings_repo = KindleSettingsRepository(db)
 kindle_deliveries_repo = KindleDeliveriesRepository(db)
 user_preferences_repo = UserPreferencesRepository(db)
@@ -117,6 +143,8 @@ kindle_service = KindleService(
     send_rate_limit_per_hour=settings.kindle_send_rate_limit_per_hour,
     enable_conversion=settings.kindle_enable_conversion,
     conversion_target_format=settings.kindle_conversion_target_format,
+    download_history_repo=download_history_repo,
+    last_books_repo=last_books_repo,
 )
 kindle_queue = KindleQueue(
     service=kindle_service,
@@ -126,11 +154,29 @@ kindle_queue = KindleQueue(
     max_attempts=settings.kindle_max_job_attempts,
     retry_base_delay_seconds=settings.kindle_retry_base_delay_seconds,
 )
+ai_assistant = AiAssistant(settings.openai_api_key, settings.ai_model, settings.ai_enabled)
 
 
 @router.message(Command("start"))
-async def start(message: Message) -> None:
+async def start(message: Message, command: CommandObject) -> None:
     log_user_action(message.from_user, message.chat.id, "start")
+    if settings.access_control_enabled and message.from_user.id not in settings.admin_ids:
+        existing = await access_repo.get_user(message.from_user.id)
+        arg = (command.args or "").strip()
+        if arg.startswith("invite_") and await access_repo.redeem_invite(arg.removeprefix("invite_"), message.from_user.id, message.from_user.username, message.from_user.full_name):
+            await message.answer("Приглашение принято. Добро пожаловать.", reply_markup=main_reply_keyboard())
+            return
+        if existing and existing.status == "blocked":
+            await message.answer("Доступ не открыт.")
+            return
+        if existing is None:
+            await access_repo.request_access(message.from_user.id, message.from_user.username, message.from_user.full_name)
+            await _notify_admins_about_request(message.bot, message.from_user)
+            await message.answer("Доступ по приглашению. Я отправил запрос администратору — напишу, когда он откроет вход.")
+            return
+        if existing.status != "approved":
+            await message.answer("Запрос уже отправлен. Я сообщу, когда админ откроет доступ.")
+            return
     if message.from_user:
         user_search_modes[message.from_user.id] = SMART_MODE
     await telegram_retry(
@@ -194,6 +240,97 @@ async def mode_command(message: Message, command: CommandObject) -> None:
         )
     )
 
+@router.message(Command("recommend"))
+async def recommend_command(message: Message, command: CommandObject) -> None:
+    query=(command.args or "").strip()
+    if not query:
+        user_search_modes[message.from_user.id]=AI_MODE
+        await message.answer("Опиши, что хочется почитать: настроение, похожую книгу или автора.")
+        return
+    await send_ai_results(message, query)
+
+@router.message(Command("invite"))
+async def invite_command(message: Message, command: CommandObject) -> None:
+    if message.from_user.id not in settings.admin_ids: return
+    raw=(command.args or "1").strip()
+    uses=int(raw) if raw.isdigit() and int(raw)>0 else 1
+    code=await access_repo.create_invite(message.from_user.id,uses)
+    me=await message.bot.get_me()
+    await message.answer(f"Приглашение на {uses} вход(а):\n<code>https://t.me/{me.username}?start=invite_{code}</code>")
+
+@router.callback_query(F.data.startswith("access_"))
+async def access_decision(callback: CallbackQuery) -> None:
+    if callback.from_user.id not in settings.admin_ids: return
+    action,user_id_raw=callback.data.split(":",1); user_id=int(user_id_raw)
+    approved=action=="access_approve"
+    await access_repo.set_status(user_id,"approved" if approved else "blocked",callback.from_user.id)
+    await callback.answer("Готово")
+    await callback.message.edit_text((callback.message.text or "") + ("\n\n✅ Доступ открыт" if approved else "\n\n❌ Отклонено"))
+    if approved:
+        await callback.bot.send_message(user_id,"Администратор открыл доступ. Можно пользоваться ботом: /start")
+
+@router.message(Command("favorites", "fav"))
+async def favorites_command(message: Message) -> None:
+    await _send_favorites_page(message, message.from_user.id, 0)
+
+@router.callback_query(F.data.startswith("fav_page:"))
+async def favorites_page(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    await _send_favorites_page(callback.message, callback.from_user.id, int(callback.data.split(":",1)[1]), edit=True)
+
+@router.message(Command("history"))
+async def history_command(message: Message) -> None:
+    await message.answer(_history_text(await download_history_repo.recent(message.from_user.id)))
+
+@router.message(Command("history_failed"))
+async def history_failed_command(message: Message) -> None:
+    await message.answer(_history_text(await download_history_repo.recent(message.from_user.id, status="failed"), failed=True))
+
+@router.message(Command("last"))
+async def last_command(message: Message) -> None:
+    item = await last_books_repo.get(message.from_user.id)
+    if item is None:
+        await message.answer("Пока нет последней книги. Открой любую карточку — и она появится здесь.")
+        return
+    preferred = await _preferred_format(message.from_user.id) or "epub"
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Открыть карточку", callback_data=f"book:{item.book_id}"))
+    kb.row(InlineKeyboardButton(text=f"Скачать {preferred.upper()}", callback_data=f"dl:{item.book_id}:{preferred}"), InlineKeyboardButton(text="📤 Kindle", callback_data=f"kindle:{item.book_id}"))
+    kb.row(InlineKeyboardButton(text="⭐ В избранное", callback_data=f"fav_add:{item.book_id}"))
+    await message.answer(f"Последняя книга:\n<b>{escape(item.title)}</b>" + (f"\n{escape(item.author)}" if item.author else ""), reply_markup=kb.as_markup())
+
+@router.message(Command("admin_cache_stats"))
+async def admin_cache_stats(message: Message) -> None:
+    if message.from_user.id not in settings.admin_ids: return
+    total, by_type, expired = await cache_repo.stats()
+    lines = ["Cache stats", f"total: {total}", f"expired: {expired}"] + [f"{k}: {v}" for k,v in sorted(by_type.items())]
+    await message.answer("\n".join(lines))
+
+@router.message(Command("admin_cache_clear"))
+async def admin_cache_clear(message: Message, command: CommandObject) -> None:
+    if message.from_user.id not in settings.admin_ids: return
+    deleted = await cache_repo.clear(all_rows=(command.args or "").strip().lower()=="all")
+    await message.answer(f"Deleted {deleted} cache rows.")
+
+@router.message(Command("admin_stats"))
+async def admin_stats(message: Message) -> None:
+    if message.from_user.id not in settings.admin_ids: return
+    async with db.connect() as c:
+        kindle_users = int((await (await c.execute("SELECT COUNT(*) FROM user_kindle_settings")).fetchone())[0])
+        failed_kindle_today = int((await (await c.execute("SELECT COUNT(*) FROM kindle_deliveries WHERE status='failed' AND created_at>=?", (datetime.now().date().isoformat(),))).fetchone())[0])
+    top = ", ".join(f"{fmt}:{count}" for fmt,count in await download_history_repo.top_formats()) or "—"
+    await message.answer(
+        "Stats\n"
+        f"Kindle users: {kindle_users}\n"
+        f"Favorites: {await favorites_repo.count()}\n"
+        f"Telegram downloads today: {await download_history_repo.sent_today('telegram')}\n"
+        f"Kindle sends today: {await download_history_repo.sent_today('kindle')}\n"
+        f"Failed Kindle today: {failed_kindle_today}\n"
+        f"Top formats: {top}\n"
+        f"Active search sessions: {len(search_sessions)+len(author_sessions)}\n"
+        f"Active queue jobs: {kindle_queue.active_jobs}"
+    )
+
 
 @router.message(F.text)
 async def search_text(message: Message) -> None:
@@ -226,6 +363,10 @@ async def search_text(message: Message) -> None:
             )
         )
         return
+    if text == RECOMMEND_BUTTON:
+        if message.from_user: user_search_modes[message.from_user.id]=AI_MODE
+        await message.answer("Опиши, что хочется почитать: «как Дюна, но короче» или «мрачную фантастику без подростковости».")
+        return
 
     mode = user_search_modes.get(message.from_user.id if message.from_user else 0, SMART_MODE)
     if mode == AUTHOR_MODE:
@@ -233,6 +374,9 @@ async def search_text(message: Message) -> None:
         return
     if mode == SMART_MODE:
         await send_smart_results(message, text)
+        return
+    if mode == AI_MODE:
+        await send_ai_results(message, text)
         return
 
     await send_search_results(message, text)
@@ -269,12 +413,31 @@ async def show_book(callback: CallbackQuery) -> None:
         duration=elapsed(started_at),
     )
     preferred_format = await _preferred_format(callback.from_user.id)
+    await last_books_repo.upsert(callback.from_user.id, details.book_id, details.title, ", ".join(details.authors) or None, "opened")
+    is_favorite = await favorites_repo.exists(callback.from_user.id, details.book_id)
     await telegram_retry(
         lambda: callback.message.answer(
             _book_text(details),
-            reply_markup=_formats_keyboard(details, preferred_format=preferred_format),
+            reply_markup=_formats_keyboard(details, preferred_format=preferred_format, is_favorite=is_favorite),
         )
     )
+
+@router.callback_query(F.data.startswith("annotation:"))
+async def show_full_annotation(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    details = await flibusta.details(callback.data.split(":",1)[1])
+    await telegram_retry(lambda: callback.message.answer(_book_text(details, full_annotation=True)))
+
+@router.callback_query(F.data.startswith("fav_add:"))
+async def add_favorite(callback: CallbackQuery) -> None:
+    await callback_answer(callback, "Добавлено в избранное")
+    details = await flibusta.details(callback.data.split(":",1)[1])
+    await favorites_repo.add(callback.from_user.id, details.book_id, details.title, ", ".join(details.authors) or None)
+
+@router.callback_query(F.data.startswith("fav_remove:"))
+async def remove_favorite(callback: CallbackQuery) -> None:
+    await callback_answer(callback, "Убрано из избранного")
+    await favorites_repo.remove(callback.from_user.id, callback.data.split(":",1)[1])
 
 
 @router.callback_query(F.data.startswith("bauthor:"))
@@ -522,6 +685,23 @@ async def show_author_books(callback: CallbackQuery) -> None:
 async def noop(callback: CallbackQuery) -> None:
     await callback_answer(callback)
 
+@router.callback_query(F.data.startswith("retry_"))
+async def retry_search(callback: CallbackQuery) -> None:
+    action, sid = callback.data.split(":",1)
+    query = retry_sessions.get(sid)
+    await callback_answer(callback)
+    if query is None:
+        await callback.message.answer("Этот повтор уже устарел.")
+        return
+    if action == "retry_short":
+        await send_smart_results(callback.message, " ".join(query.split()[:3]))
+    elif action == "retry_book":
+        await send_search_results(callback.message, query)
+    elif action == "retry_author":
+        await send_author_results(callback.message, query)
+    else:
+        await send_smart_results(callback.message, _clean_query(query))
+
 
 @router.callback_query(F.data.startswith("dl:"))
 async def download_book(callback: CallbackQuery) -> None:
@@ -533,6 +713,10 @@ async def download_book(callback: CallbackQuery) -> None:
         lambda: callback.message.answer(f"Скачиваю {escape(fmt.upper())}...")
     )
 
+    if callback.from_user.id not in settings.admin_ids and await download_history_repo.count_recent_downloads(callback.from_user.id) >= settings.download_rate_limit_per_hour:
+        await telegram_retry(lambda: callback.message.answer("Лимит скачиваний пока исчерпан. Попробуй позже."))
+        return
+    details = None
     try:
         details = await flibusta.details(book_id)
         target = next((item for item in details.formats if item.code == fmt), None)
@@ -571,6 +755,7 @@ async def download_book(callback: CallbackQuery) -> None:
             duration=elapsed(started_at),
         )
         await telegram_retry(lambda: callback.message.answer(str(exc)))
+        await download_history_repo.add(user_id=callback.from_user.id,book_id=book_id,title=details.title if details else None,author=", ".join(details.authors) if details else None,format=fmt,filename=None,file_size_bytes=None,delivery_target="telegram",status="failed",error=str(exc))
         return
 
     size_mb = len(content) / 1024 / 1024
@@ -592,6 +777,7 @@ async def download_book(callback: CallbackQuery) -> None:
                 f"({settings.telegram_max_upload_mb} МБ)."
             )
         )
+        await download_history_repo.add(user_id=callback.from_user.id,book_id=book_id,title=details.title,author=", ".join(details.authors) or None,format=fmt,filename=filename,file_size_bytes=len(content),delivery_target="telegram",status="failed",error="telegram upload too large")
         return
 
     log_user_action(
@@ -632,6 +818,7 @@ async def download_book(callback: CallbackQuery) -> None:
                 "Не удалось отправить файл в Telegram. Если файл большой, попробуй другой формат."
             )
         )
+        await download_history_repo.add(user_id=callback.from_user.id,book_id=book_id,title=details.title,author=", ".join(details.authors) or None,format=fmt,filename=filename,file_size_bytes=len(content),delivery_target="telegram",status="failed",error="telegram upload failed")
         return
 
     log_user_action(
@@ -645,9 +832,14 @@ async def download_book(callback: CallbackQuery) -> None:
         duration=elapsed(started_at),
     )
     await _remember_preferred_format(callback.from_user.id, fmt)
+    await download_history_repo.add(user_id=callback.from_user.id,book_id=book_id,title=details.title,author=", ".join(details.authors) or None,format=fmt,filename=filename,file_size_bytes=len(content),delivery_target="telegram",status="sent")
+    await last_books_repo.upsert(callback.from_user.id, book_id, details.title, ", ".join(details.authors) or None, "downloaded")
 
 
 async def send_search_results(message: Message, query: str) -> None:
+    if not _allow_search(message.from_user.id):
+        await telegram_retry(lambda: message.answer("Слишком много поисков. Подожди немного и попробуй снова."))
+        return
     started_at = monotonic()
     log_user_action(message.from_user, message.chat.id, "search_start", query=query)
     try:
@@ -683,7 +875,7 @@ async def send_search_results(message: Message, query: str) -> None:
             query=query,
             duration=elapsed(started_at),
         )
-        await telegram_retry(lambda: message.answer("Ничего не найдено."))
+        await _send_no_results(message, query)
         return
 
     session = _create_search_session(message.from_user.id, message.chat.id, query, results)
@@ -706,6 +898,9 @@ async def send_search_results(message: Message, query: str) -> None:
 
 
 async def send_author_results(message: Message, query: str) -> None:
+    if not _allow_search(message.from_user.id):
+        await telegram_retry(lambda: message.answer("Слишком много поисков. Подожди немного и попробуй снова."))
+        return
     started_at = monotonic()
     log_user_action(message.from_user, message.chat.id, "author_search_start", query=query)
     try:
@@ -741,7 +936,7 @@ async def send_author_results(message: Message, query: str) -> None:
             query=query,
             duration=elapsed(started_at),
         )
-        await telegram_retry(lambda: message.answer("Авторы не найдены."))
+        await _send_no_results(message, query)
         return
 
     session = _create_author_session(message.from_user.id, message.chat.id, query, authors)
@@ -763,8 +958,14 @@ async def send_author_results(message: Message, query: str) -> None:
 
 
 async def send_smart_results(message: Message, query: str) -> None:
+    if not _allow_search(message.from_user.id):
+        await telegram_retry(lambda: message.answer("Слишком много поисков. Подожди немного и попробуй снова."))
+        return
     started_at = monotonic()
-    cleaned = _clean_query(query)
+    analysis = analyze_query(query)
+    cleaned = _clean_query(analysis.cleaned or query)
+    if analysis.format_hint:
+        await _remember_preferred_format(message.from_user.id, analysis.format_hint)
     log_user_action(message.from_user, message.chat.id, "smart_search_start", query=query)
     try:
         await telegram_retry(
@@ -801,10 +1002,10 @@ async def send_smart_results(message: Message, query: str) -> None:
 
     books = _rank_and_dedupe_books(raw_books, query)
     authors = _rank_authors(raw_authors, query)
-    top_author_is_exact = bool(authors and _norm(authors[0].name) == _norm(query))
+    top_author_is_exact = bool(authors and _norm(authors[0].name) == _norm(cleaned))
     top_book_is_exact = bool(books and _norm(_base_title(books[0].title)) == _norm(query))
 
-    if top_author_is_exact and not top_book_is_exact:
+    if (analysis.likely_author or top_author_is_exact) and not analysis.quoted_title and not top_book_is_exact and authors:
         session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
         log_user_action(
             message.from_user,
@@ -821,6 +1022,12 @@ async def send_smart_results(message: Message, query: str) -> None:
                 reply_markup=_author_results_keyboard(session),
             )
         )
+        return
+
+    if books and authors and not top_book_is_exact and not top_author_is_exact and not analysis.quoted_title:
+        book_session = _create_search_session(message.from_user.id, message.chat.id, used_query, books)
+        author_session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
+        await telegram_retry(lambda: message.answer(_combined_results_text(used_query, books, authors), reply_markup=_combined_results_keyboard(book_session, author_session)))
         return
 
     if books:
@@ -855,7 +1062,27 @@ async def send_smart_results(message: Message, query: str) -> None:
         )
         return
 
-    await telegram_retry(lambda: message.answer("Ничего не найдено."))
+    await _send_no_results(message, query)
+
+async def send_ai_results(message: Message, query: str) -> None:
+    intent = await ai_assistant.understand(query)
+    await message.answer(intent.reply)
+    for candidate in intent.search_queries:
+        raw_books, raw_authors = await flibusta.search_all(candidate, book_limit=settings.search_results_limit, author_limit=settings.search_results_limit)
+        books = _rank_and_dedupe_books(raw_books, candidate)
+        authors = _rank_authors(raw_authors, candidate)
+        if books or authors:
+            if books and authors:
+                bs=_create_search_session(message.from_user.id,message.chat.id,candidate,books); aus=_create_author_session(message.from_user.id,message.chat.id,candidate,authors)
+                await message.answer(_combined_results_text(candidate,books,authors),reply_markup=_combined_results_keyboard(bs,aus))
+            elif books:
+                session=_create_search_session(message.from_user.id,message.chat.id,candidate,books,title=f"Подобрал по запросу: <b>{escape(candidate)}</b>")
+                await message.answer(_search_results_text(session),reply_markup=_search_results_keyboard(session))
+            else:
+                session=_create_author_session(message.from_user.id,message.chat.id,candidate,authors)
+                await message.answer(_author_results_text(session),reply_markup=_author_results_keyboard(session))
+            return
+    await _send_no_results(message, query)
 
 
 async def telegram_retry(
@@ -1107,7 +1334,7 @@ def _smtp_config_present() -> bool:
     return True
 
 
-def _book_text(details: BookDetails) -> str:
+def _book_text(details: BookDetails, full_annotation: bool = False) -> str:
     parts = [f"<b>{escape(details.title)}</b>"]
     if details.authors:
         parts.append(escape(", ".join(details.authors[:5])))
@@ -1127,13 +1354,18 @@ def _book_text(details: BookDetails) -> str:
         parts.append(escape(" · ".join(meta_parts)))
 
     if details.annotation:
-        parts.append(escape(details.annotation))
+        annotation = details.annotation
+        if not full_annotation and len(annotation) > settings.book_annotation_max_chars:
+            annotation = annotation[: settings.book_annotation_max_chars - 1].rstrip() + "…"
+        parts.append(escape(annotation))
     if not details.formats:
         parts.append("Доступные форматы не найдены.")
+    elif not any(item.code in {"epub", "fb2", "txt", "mobi", "pdf"} for item in details.formats):
+        parts.append("Kindle-совместимый формат не найден.")
     return "\n\n".join(parts)
 
 
-def _formats_keyboard(details: BookDetails, preferred_format: str | None = None):
+def _formats_keyboard(details: BookDetails, preferred_format: str | None = None, is_favorite: bool = False):
     author_buttons = [item for item in details.author_refs[:3] if item.author_id]
     if not details.formats and not author_buttons:
         return None
@@ -1161,6 +1393,9 @@ def _formats_keyboard(details: BookDetails, preferred_format: str | None = None)
     kindle_code=next((c for c in [preferred_format,'epub','fb2','txt','mobi','pdf'] if c and any(f.code==c for f in details.formats)),None)
     if kindle_code:
         keyboard.row(InlineKeyboardButton(text=f"📤 Send {kindle_code.upper()} to Kindle", callback_data=f"kindle:{details.book_id}"))
+    if details.annotation and len(details.annotation) > settings.book_annotation_max_chars:
+        keyboard.row(InlineKeyboardButton(text="Показать всю аннотацию", callback_data=f"annotation:{details.book_id}"))
+    keyboard.row(InlineKeyboardButton(text="✅ В избранном" if is_favorite else "⭐ В избранное", callback_data=f"{'fav_remove' if is_favorite else 'fav_add'}:{details.book_id}"))
 
     return keyboard.as_markup()
 
@@ -1172,6 +1407,7 @@ def main_reply_keyboard() -> ReplyKeyboardMarkup:
                 KeyboardButton(text=BOOK_SEARCH_BUTTON),
                 KeyboardButton(text=AUTHOR_SEARCH_BUTTON),
             ],
+            [KeyboardButton(text=RECOMMEND_BUTTON)],
             [KeyboardButton(text=HELP_BUTTON)],
         ],
         resize_keyboard=True,
@@ -1247,12 +1483,72 @@ def _fallback_queries(query: str) -> list[str]:
                 candidates.append(candidate)
     return candidates
 
+def _allow_search(user_id: int) -> bool:
+    if user_id in settings.admin_ids: return True
+    cutoff = time() - 60
+    items = [value for value in search_timestamps.get(user_id, []) if value >= cutoff]
+    if len(items) >= settings.search_rate_limit_per_minute:
+        search_timestamps[user_id] = items
+        return False
+    items.append(time()); search_timestamps[user_id] = items; return True
+
+async def _send_no_results(message: Message, query: str) -> None:
+    sid=uuid4().hex[:10]; retry_sessions[sid]=query; _prune_sessions(retry_sessions)
+    kb=InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Попробовать короче",callback_data=f"retry_short:{sid}"))
+    kb.row(InlineKeyboardButton(text="Искать как книгу",callback_data=f"retry_book:{sid}"),InlineKeyboardButton(text="Искать как автора",callback_data=f"retry_author:{sid}"))
+    kb.row(InlineKeyboardButton(text="Убрать кавычки и повторить",callback_data=f"retry_clean:{sid}"))
+    await telegram_retry(lambda: message.answer(f"Ничего не найдено по запросу: <b>{escape(query)}</b>",reply_markup=kb.as_markup()))
+
+def _combined_results_text(query,books,authors):
+    book_lines="\\n".join(f"• {escape(b.title)}" + (f" — {escape(b.author)}" if b.author else "") for b in books[:5])
+    author_lines="\\n".join(f"• {escape(a.name)}" for a in authors[:5])
+    return f"Нашёл книги и авторов по запросу: <b>{escape(query)}</b>\\n\\n<b>Книги</b>\\n{book_lines}\\n\\n<b>Авторы</b>\\n{author_lines}"
+
+def _combined_results_keyboard(book_session,author_session):
+    kb=InlineKeyboardBuilder()
+    for item in book_session.results[:5]: kb.row(InlineKeyboardButton(text=(item.title if not item.author else f"{item.title} - {item.author}")[:64],callback_data=f"book:{item.book_id}"))
+    for item in author_session.authors[:5]: kb.row(InlineKeyboardButton(text=f"Автор: {item.name}"[:64],callback_data=f"author:{author_session.session_id}:{item.author_id}"))
+    kb.row(InlineKeyboardButton(text="Показать больше книг",callback_data=f"page:{book_session.session_id}:0"),InlineKeyboardButton(text="Показать больше авторов",callback_data=f"apage:{author_session.session_id}:0"))
+    return kb.as_markup()
+
+async def _send_favorites_page(message: Message, user_id: int, page: int, edit: bool=False):
+    items=await favorites_repo.list(user_id,limit=8,offset=page*8); count=await favorites_repo.count(user_id)
+    if not items:
+        await (message.edit_text("Избранное пока пустое.") if edit else message.answer("Избранное пока пустое.")); return
+    kb=InlineKeyboardBuilder()
+    for item in items:
+        kb.row(InlineKeyboardButton(text=(item.title if not item.author else f"{item.title} — {item.author}")[:64],callback_data=f"book:{item.book_id}"),InlineKeyboardButton(text="✕",callback_data=f"fav_remove:{item.book_id}"))
+    nav=[]
+    if page>0: nav.append(InlineKeyboardButton(text="<<",callback_data=f"fav_page:{page-1}"))
+    if (page+1)*8<count: nav.append(InlineKeyboardButton(text=">>",callback_data=f"fav_page:{page+1}"))
+    if nav: kb.row(*nav)
+    text=f"Избранное: {count}"
+    await (message.edit_text(text,reply_markup=kb.as_markup()) if edit else message.answer(text,reply_markup=kb.as_markup()))
+
+def _history_text(items:list[DownloadHistoryItem],failed:bool=False)->str:
+    if not items: return "Неудачных попыток пока нет." if failed else "История пока пустая."
+    head="Последние неудачные попытки:" if failed else "Последние отправки:"
+    lines=[head]
+    for item in items:
+        lines.append(f"{item.created_at[:16]} — {item.title or item.book_id} [{item.format}] → {item.delivery_target}" + (f" ({item.error})" if failed and item.error else ""))
+    return "\\n".join(lines)
+
+async def _notify_admins_about_request(bot: Bot, user: User) -> None:
+    kb=InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="✅ Разрешить",callback_data=f"access_approve:{user.id}"),InlineKeyboardButton(text="❌ Отклонить",callback_data=f"access_reject:{user.id}"))
+    label=escape(user.full_name)
+    if user.username: label += f" @{escape(user.username)}"
+    for admin_id in settings.admin_ids:
+        await telegram_retry(lambda admin_id=admin_id: bot.send_message(admin_id,f"Запрос доступа:\n{label}\n<code>{user.id}</code>",reply_markup=kb.as_markup()))
+
 
 async def setup_bot_commands(bot: Bot) -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="search", description="поиск книг"),
             BotCommand(command="author", description="поиск авторов"),
+            BotCommand(command="recommend", description="подобрать книгу"),
             BotCommand(command="mode", description="переключить режим"),
             BotCommand(command="kindle_email", description="сохранить Kindle e-mail"),
             BotCommand(command="kindle_help", description="настройка Send to Kindle"),
@@ -1262,6 +1558,10 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="kindle_history", description="история Kindle"),
             BotCommand(command="kindle_format", description="формат Kindle"),
             BotCommand(command="kindle_retry", description="повторить Kindle"),
+            BotCommand(command="favorites", description="избранные книги"),
+            BotCommand(command="history", description="история отправок"),
+            BotCommand(command="history_failed", description="неудачные отправки"),
+            BotCommand(command="last", description="последняя книга"),
             BotCommand(command="start", description="открыть меню"),
         ]
     )
@@ -1286,6 +1586,9 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dispatcher = Dispatcher()
+    if settings.access_control_enabled:
+        dispatcher.message.middleware(AccessMiddleware(access_repo, settings.admin_ids))
+        dispatcher.callback_query.middleware(AccessMiddleware(access_repo, settings.admin_ids))
     dispatcher.include_router(
         build_kindle_router(
             db=db,

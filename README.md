@@ -3,12 +3,17 @@
 Лёгкий Telegram-бот для поиска и скачивания книг с Flibusta.
 
 ## Что умеет
+- закрытый вход: по приглашению или после одобрения админом;
 - умный поиск: обычный ввод сам пытается понять, книга это или автор;
 - отдельные режимы поиска книги и автора;
 - карточка книги и выбор формата;
 - постоянное меню в Telegram;
-- запоминание предпочитаемого формата пользователя без базы данных.
-- отправка книг на Kindle по e-mail через Amazon SES SMTP.
+- SQLite-кэш для поиска и карточек;
+- избранное, история отправок и команда `/last`;
+- более осторожный smart search для неоднозначных запросов;
+- запоминание предпочитаемого формата пользователя в SQLite;
+- отправка книг на Kindle по e-mail через Amazon SES SMTP;
+- опциональный AI-помощник для формулировки книжных запросов.
 
 ## Локальный запуск
 ```bash
@@ -46,6 +51,19 @@ KINDLE_ENABLE_CONVERSION=false
 KINDLE_CONVERSION_TARGET_FORMAT=epub
 DATABASE_PATH=bot.db
 ADMIN_USER_IDS=
+CACHE_ENABLED=true
+CACHE_BOOK_SEARCH_TTL_SECONDS=1800
+CACHE_AUTHOR_SEARCH_TTL_SECONDS=1800
+CACHE_SMART_SEARCH_TTL_SECONDS=1800
+CACHE_BOOK_DETAILS_TTL_SECONDS=21600
+CACHE_AUTHOR_BOOKS_TTL_SECONDS=21600
+BOOK_ANNOTATION_MAX_CHARS=1200
+SEARCH_RATE_LIMIT_PER_MINUTE=20
+DOWNLOAD_RATE_LIMIT_PER_HOUR=30
+ACCESS_CONTROL_ENABLED=true
+AI_ENABLED=false
+OPENAI_API_KEY=
+AI_MODEL=gpt-5-nano
 ```
 
 `SMTP_HOST` must be the region-specific SES endpoint, such as `email-smtp.eu-central-1.amazonaws.com` or `email-smtp.us-east-1.amazonaws.com`. `SMTP_USERNAME` and `SMTP_PASSWORD` must be **SES SMTP credentials**, not regular AWS access keys. `KINDLE_MAX_ATTACHMENT_MB` defaults to `28` because MIME/base64 encoding inflates e-mail attachments.
@@ -100,6 +118,33 @@ Kindle sending uses a lightweight in-process async queue. It keeps Telegram resp
 - Legacy `user_prefs.json` is imported once and renamed to `user_prefs.json.migrated`.
 - Useful admin commands: `/admin_kindle_health`, `/admin_kindle_failures`, `/admin_kindle_delivery <id>`, `/admin_export_settings`, `/admin_cleanup_deliveries`.
 - Before deployment, verify SES identity, DKIM, production access, SMTP credentials, `SMTP_FROM_EMAIL`, and the SQLite path is writable.
+
+## Product features
+
+- `/favorites` or `/fav` — saved books; only metadata is stored, never the downloaded book files.
+- `/history` and `/history_failed` — recent Telegram/Kindle sends and failures.
+- `/last` — reopen the last book with quick actions.
+- Smart search strips format hints like `epub`, recognizes quoted titles and author-looking queries, and shows books plus authors together when the query is ambiguous.
+- Flibusta search/details responses are cached in SQLite with short TTLs to make repeated requests faster and gentler on the source site.
+- Long annotations are shortened in cards; the full text is available by button.
+- Series support is scaffolded in the data model, but the button stays hidden until Flibusta exposes reliable data for a book.
+
+Admin product commands:
+- `/admin_stats`
+- `/admin_cache_stats`
+- `/admin_cache_clear`
+- `/admin_cache_clear all`
+- `/invite` — создать invite-link; `/invite 5` даст пять активаций.
+
+Rate limits are intentionally small and boring: search is limited per minute in memory, Telegram downloads per hour via SQLite history, admins bypass both.
+
+## Access control
+
+При `ACCESS_CONTROL_ENABLED=true` новый пользователь не попадает в библиотеку сразу: `/start` создаёт запрос, а админ получает кнопки «Разрешить / Отклонить». Для доверенных людей можно создать deep-link командой `/invite`; состояние хранится в SQLite.
+
+## AI assistant
+
+`/recommend` и кнопка «🤖 Подобрать книгу» включают спокойный помощник поверх обычного поиска. Он не заменяет каталог и не выдумывает наличие книг: превращает человеческую фразу в несколько коротких запросов к Flibusta, после чего бот показывает реальные найденные книги. По умолчанию AI выключен; для включения нужны `AI_ENABLED=true` и `OPENAI_API_KEY`.
 
 ### Troubleshooting
 - Domain verified but mail is not delivered: check DKIM and SES event history.

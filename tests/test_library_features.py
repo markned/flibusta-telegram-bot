@@ -1,0 +1,57 @@
+import asyncio
+from pathlib import Path
+from app.repositories.db import Database
+from app.repositories.cache import CacheRepository
+from app.repositories.favorites import FavoritesRepository
+from app.repositories.download_history import DownloadHistoryRepository
+from app.repositories.last_books import LastBooksRepository
+from app.services.query_analyzer import analyze_query
+from app.services.cached_flibusta import CachedFlibustaClient
+from app.flibusta import SearchResult, AuthorResult
+
+def run(c): return asyncio.run(c)
+
+def test_query_analysis():
+ a=analyze_query('"Мастер и Маргарита" epub')
+ assert a.quoted_title and a.cleaned=='"Мастер и Маргарита"' and a.format_hint=='epub'
+ assert analyze_query('Лев Толстой').likely_author
+ b=analyze_query('Лев Толстой - Война и мир')
+ assert b.author_part=='Лев Толстой' and b.title_part=='Война и мир'
+
+def test_cache_hit_and_cleanup(tmp_path:Path):
+ db=Database(str(tmp_path/'db.sqlite')); run(db.initialize()); repo=CacheRepository(db)
+ run(repo.set('x','book_search',[{'book_id':'1'}],60)); assert run(repo.get('x'))==[{'book_id':'1'}]
+ total,by_type,expired=run(repo.stats()); assert total==1 and by_type['book_search']==1 and expired==0
+ run(repo.set('old','book_search',[], -1)); assert run(repo.get('old')) is None; assert run(repo.clear())==1
+
+def test_favorites_history_and_last_book(tmp_path:Path):
+ db=Database(str(tmp_path/'db.sqlite')); run(db.initialize())
+ fav=FavoritesRepository(db); hist=DownloadHistoryRepository(db); last=LastBooksRepository(db)
+ run(fav.add(1,'7','Book','Author')); run(fav.add(1,'7','Book','Author'))
+ assert run(fav.count(1))==1 and run(fav.exists(1,'7'))
+ run(hist.add(user_id=1,book_id='7',title='Book',author='Author',format='epub',filename='b.epub',file_size_bytes=4,delivery_target='telegram',status='sent'))
+ assert run(hist.recent(1))[0].title=='Book'
+ run(last.upsert(1,'7','Book','Author','opened')); assert run(last.get(1)).book_id=='7'
+ assert run(fav.remove(1,'7'))==1
+
+class CountingFlibusta:
+ def __init__(self): self.calls=0
+ async def search(self,q,limit=8): self.calls+=1; return [SearchResult('1','Book','Author')]
+ async def close(self): pass
+
+def test_cached_client_uses_cached_search(tmp_path:Path):
+ db=Database(str(tmp_path/'db.sqlite')); run(db.initialize()); raw=CountingFlibusta(); cached=CachedFlibustaClient(raw,CacheRepository(db),enabled=True,ttls={'book_search':60})
+ assert run(cached.search('Book'))[0].title=='Book'; assert run(cached.search('Book'))[0].title=='Book'; assert raw.calls==1
+
+def test_access_invite_and_approval(tmp_path:Path):
+ from app.repositories.access import AccessRepository
+ db=Database(str(tmp_path/'db.sqlite')); run(db.initialize()); repo=AccessRepository(db)
+ run(repo.request_access(1,'u','User')); assert run(repo.get_user(1)).status=='pending'
+ run(repo.set_status(1,'approved',99)); assert run(repo.get_user(1)).status=='approved'
+ code=run(repo.create_invite(99,1)); assert run(repo.redeem_invite(code,2,'v','Visitor')) is True
+ assert run(repo.get_user(2)).status=='approved'; assert run(repo.redeem_invite(code,3,'w','Other')) is False
+
+def test_ai_assistant_disabled_falls_back():
+ from app.services.ai_assistant import AiAssistant
+ result=run(AiAssistant(None,'gpt-5-nano',False).understand('что-то как Дюна'))
+ assert result.search_queries==['что-то как Дюна']

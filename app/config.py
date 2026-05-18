@@ -42,6 +42,19 @@ class Settings(BaseSettings):
     admin_export_include_full_emails: bool = Field(default=False, alias="ADMIN_EXPORT_INCLUDE_FULL_EMAILS")
     database_path: str = Field(default="bot.db", alias="DATABASE_PATH")
     admin_user_ids: str = Field(default="", alias="ADMIN_USER_IDS")
+    cache_enabled: bool = Field(default=True, alias="CACHE_ENABLED")
+    cache_book_search_ttl_seconds: int = Field(default=1800, alias="CACHE_BOOK_SEARCH_TTL_SECONDS")
+    cache_author_search_ttl_seconds: int = Field(default=1800, alias="CACHE_AUTHOR_SEARCH_TTL_SECONDS")
+    cache_smart_search_ttl_seconds: int = Field(default=1800, alias="CACHE_SMART_SEARCH_TTL_SECONDS")
+    cache_book_details_ttl_seconds: int = Field(default=21600, alias="CACHE_BOOK_DETAILS_TTL_SECONDS")
+    cache_author_books_ttl_seconds: int = Field(default=21600, alias="CACHE_AUTHOR_BOOKS_TTL_SECONDS")
+    book_annotation_max_chars: int = Field(default=1200, alias="BOOK_ANNOTATION_MAX_CHARS")
+    search_rate_limit_per_minute: int = Field(default=20, alias="SEARCH_RATE_LIMIT_PER_MINUTE")
+    download_rate_limit_per_hour: int = Field(default=30, alias="DOWNLOAD_RATE_LIMIT_PER_HOUR")
+    access_control_enabled: bool = Field(default=True, alias="ACCESS_CONTROL_ENABLED")
+    ai_enabled: bool = Field(default=False, alias="AI_ENABLED")
+    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
+    ai_model: str = Field(default="gpt-5-nano", alias="AI_MODEL")
 
     @property
     def base_url(self) -> str:

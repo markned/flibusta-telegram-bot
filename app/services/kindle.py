@@ -10,6 +10,8 @@ from email_validator import EmailNotValidError, validate_email
 from app.flibusta import DownloadFormat, FlibustaClient, FlibustaError
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository
 from app.repositories.kindle_settings import KindleSettingsRepository
+from app.repositories.download_history import DownloadHistoryRepository
+from app.repositories.last_books import LastBooksRepository
 from app.services.conversion import ConversionNotAvailableError, ConversionService
 from app.services.email_sender import EmailSender
 from app.services.smtp_errors import classify_smtp_error
@@ -98,7 +100,7 @@ def sanitize_filename(filename: str, fallback: str = "book", max_length: int = 1
 
 def choose_best_format(formats: Iterable[DownloadFormat], preferred: str | None) -> DownloadFormat:
     by_code = {item.code: item for item in formats}
-    for code in [preferred, "epub", "fb2", "txt", "pdf"]:
+    for code in [preferred, "epub", "fb2", "txt", "mobi", "pdf"]:
         if code and code in by_code:
             return by_code[code]
     raise KindleFormatUnavailableError("No Kindle-compatible format is available for this book.")
@@ -118,6 +120,8 @@ class KindleService:
         send_rate_limit_per_hour: int,
         enable_conversion: bool,
         conversion_target_format: str,
+        download_history_repo: DownloadHistoryRepository | None = None,
+        last_books_repo: LastBooksRepository | None = None,
     ):
         self.flibusta = flibusta
         self.settings_repo = settings_repo
@@ -129,6 +133,8 @@ class KindleService:
         self.send_rate_limit_per_hour = send_rate_limit_per_hour
         self.enable_conversion = enable_conversion
         self.conversion_target_format = conversion_target_format
+        self.download_history_repo = download_history_repo
+        self.last_books_repo = last_books_repo
 
     async def create_queued_delivery(self, user_id: int, book_id: str, retry_of_delivery_id: int | None = None) -> int:
         settings = await self.settings_repo.get(user_id)
@@ -209,9 +215,15 @@ class KindleService:
                 content_type=content_type,
             )
             await self.deliveries_repo.update_status(delivery_id, "sent")
+            if self.download_history_repo:
+                await self.download_history_repo.add(user_id=user_id,book_id=book_id,title=details.title,author=", ".join(details.authors) or None,format=target_code,filename=filename,file_size_bytes=len(content),delivery_target="kindle",status="sent")
+            if self.last_books_repo:
+                await self.last_books_repo.upsert(user_id,book_id,details.title,", ".join(details.authors) or None,"kindle_sent")
             return KindleSendResult(details.title, filename, target_code, len(content))
         except Exception as exc:
             await self.deliveries_repo.mark_failed(delivery_id, f"{classify_smtp_error(exc)}: {redact_sensitive_text(str(exc))}")
+            if self.download_history_repo:
+                await self.download_history_repo.add(user_id=user_id,book_id=book_id,title=locals().get("details").title if locals().get("details") else None,author=", ".join(locals().get("details").authors) if locals().get("details") else None,format=locals().get("target_code", locals().get("target").code if locals().get("target") else self.default_format),filename=locals().get("filename"),file_size_bytes=len(locals().get("content", b"")) or None,delivery_target="kindle",status="failed",error=classify_smtp_error(exc))
             raise
 
     async def send_book_to_kindle(self, user_id: int, book_id: str) -> KindleSendResult:

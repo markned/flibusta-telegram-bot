@@ -6,7 +6,7 @@ import re
 import zipfile
 from asyncio import sleep
 from io import BytesIO
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import monotonic
 from typing import Iterable
 from urllib.parse import quote_plus, urljoin, urlparse
@@ -38,6 +38,12 @@ class DownloadFormat:
     label: str
     url: str
 
+@dataclass(frozen=True)
+class SeriesRef:
+    series_id: str | None
+    name: str
+    position: str | None
+
 
 @dataclass(frozen=True)
 class BookDetails:
@@ -53,6 +59,7 @@ class BookDetails:
     annotation: str | None
     formats: list[DownloadFormat]
     page_url: str
+    series: list[SeriesRef] = field(default_factory=list)
 
 
 class FlibustaError(RuntimeError):
