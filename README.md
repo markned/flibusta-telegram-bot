@@ -23,6 +23,14 @@ python3.12 -m venv .venv
 .venv/bin/python -m app.main
 ```
 
+## Структура кода
+
+- `app/main.py` — сборка зависимостей, bootstrap и тонкая маршрутизация;
+- `app/ui/` — рендеринг пользовательских экранов и клавиатур;
+- `app/state.py` — короткоживущие сессии выдач;
+- `app/services/search_logic.py` — чистая логика нормализации и ранжирования поиска;
+- `app/handlers/` — крупные пользовательские контуры вроде Kindle и админки.
+
 ## Деплой
 См. `deploy/oracle-cloud.md`.
 

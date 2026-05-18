@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import re
 from asyncio import sleep
-from dataclasses import dataclass
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -31,7 +30,7 @@ from aiogram.types import User
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.config import Settings
-from app.flibusta import AuthorResult, BookDetails, FlibustaClient, FlibustaError
+from app.flibusta import AuthorResult, FlibustaClient, FlibustaError
 from app.handlers.kindle import build_kindle_router, user_message_for_exception
 from app.handlers.admin import build_admin_router
 from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
@@ -52,6 +51,37 @@ from app.services.cached_flibusta import CachedFlibustaClient
 from app.services.query_analyzer import analyze_query
 from app.services.ai_assistant import AiAssistant
 from app.middlewares.access import AccessMiddleware
+from app.state import (
+    AuthorSession,
+    SearchSession,
+    author_sessions,
+    create_author_session as _create_author_session,
+    create_search_session as _create_search_session,
+    prune_sessions as _prune_sessions,
+    retry_sessions,
+    search_sessions,
+    search_timestamps,
+)
+from app.services.search_logic import (
+    base_title as _base_title,
+    clean_query as _clean_query,
+    fallback_queries as _fallback_queries,
+    norm as _norm,
+    rank_and_dedupe_books as _rank_and_dedupe_books,
+    rank_authors as _rank_authors,
+)
+from app.ui.library import (
+    author_results_keyboard as _author_results_keyboard,
+    author_results_text as _author_results_text,
+    book_text as render_book_text,
+    combined_results_keyboard as _combined_results_keyboard,
+    combined_results_text as _combined_results_text,
+    formats_keyboard as render_formats_keyboard,
+    history_text as _history_text,
+    main_reply_keyboard,
+    search_results_keyboard as _search_results_keyboard,
+    search_results_text as _search_results_text,
+)
 
 settings = Settings()
 logging.basicConfig(
@@ -68,33 +98,6 @@ LAST_BUTTON = "📚 Последняя"
 KINDLE_BUTTON = "⚙️ Kindle"
 
 router = Router()
-
-
-@dataclass(frozen=True)
-class SearchSession:
-    session_id: str
-    user_id: int
-    chat_id: int
-    query: str
-    title: str | None
-    page: int
-    results: list
-
-
-@dataclass(frozen=True)
-class AuthorSession:
-    session_id: str
-    user_id: int
-    chat_id: int
-    query: str
-    page: int
-    authors: list[AuthorResult]
-
-
-search_sessions: dict[str, SearchSession] = {}
-author_sessions: dict[str, AuthorSession] = {}
-retry_sessions: dict[str, str] = {}
-search_timestamps: dict[int, list[float]] = {}
 
 raw_flibusta = FlibustaClient(
     settings.base_url,
@@ -352,8 +355,8 @@ async def show_book(callback: CallbackQuery) -> None:
     is_favorite = await favorites_repo.exists(callback.from_user.id, details.book_id)
     await telegram_retry(
         lambda: callback.message.answer(
-            _book_text(details),
-            reply_markup=_formats_keyboard(details, preferred_format=preferred_format, is_favorite=is_favorite),
+            render_book_text(details, settings.book_annotation_max_chars),
+            reply_markup=render_formats_keyboard(details, preferred_format=preferred_format, is_favorite=is_favorite, annotation_max_chars=settings.book_annotation_max_chars),
         )
     )
 
@@ -361,7 +364,7 @@ async def show_book(callback: CallbackQuery) -> None:
 async def show_full_annotation(callback: CallbackQuery) -> None:
     await callback_answer(callback)
     details = await flibusta.details(callback.data.split(":",1)[1])
-    await telegram_retry(lambda: callback.message.answer(_book_text(details, full_annotation=True)))
+    await telegram_retry(lambda: callback.message.answer(render_book_text(details, settings.book_annotation_max_chars, full_annotation=True)))
 
 @router.callback_query(F.data.startswith("fav_add:"))
 async def add_favorite(callback: CallbackQuery) -> None:
@@ -1073,146 +1076,6 @@ def short_log_value(value: object, limit: int = 160) -> str:
     return text[: limit - 3] + "..."
 
 
-def _create_search_session(
-    user_id: int,
-    chat_id: int,
-    query: str,
-    results: list,
-    title: str | None = None,
-) -> SearchSession:
-    _prune_sessions(search_sessions)
-
-    session = SearchSession(
-        session_id=uuid4().hex[:10],
-        user_id=user_id,
-        chat_id=chat_id,
-        query=query,
-        title=title,
-        page=0,
-        results=results,
-    )
-    search_sessions[session.session_id] = session
-    return session
-
-
-def _create_author_session(user_id: int, chat_id: int, query: str, authors: list[AuthorResult]) -> AuthorSession:
-    _prune_sessions(author_sessions)
-    session = AuthorSession(
-        session_id=uuid4().hex[:10],
-        user_id=user_id,
-        chat_id=chat_id,
-        query=query,
-        page=0,
-        authors=authors,
-    )
-    author_sessions[session.session_id] = session
-    return session
-
-
-def _prune_sessions(storage: dict[str, object]) -> None:
-    if len(storage) > 100:
-        stale_keys = list(storage.keys())[:20]
-        for key in stale_keys:
-            storage.pop(key, None)
-
-
-def _search_results_text(session: SearchSession, title: str | None = None) -> str:
-    total_results = len(session.results)
-    page_count = total_pages(total_results)
-    start = session.page * SEARCH_PAGE_SIZE + 1
-    end = min(total_results, (session.page + 1) * SEARCH_PAGE_SIZE)
-    heading = title or session.title or f"<b>Книги</b>\nПо запросу: <b>{escape(session.query)}</b>"
-    return (
-        f"{heading}\n"
-        f"Показаны {start}-{end} из {total_results}. Страница {session.page + 1}/{page_count}."
-    )
-
-
-def _search_results_keyboard(session: SearchSession):
-    keyboard = InlineKeyboardBuilder()
-    items = page_items(session.results, session.page)
-    for item in items:
-        label = item.title if not item.author else f"{item.title} - {item.author}"
-        keyboard.row(InlineKeyboardButton(text=label[:64], callback_data=f"book:{item.book_id}"))
-
-    page_count = total_pages(len(session.results))
-    if page_count > 1:
-        nav_buttons: list[InlineKeyboardButton] = []
-        if session.page > 0:
-            nav_buttons.append(
-                InlineKeyboardButton(
-                    text="<< Назад",
-                    callback_data=f"page:{session.session_id}:{session.page - 1}",
-                )
-            )
-        nav_buttons.append(
-            InlineKeyboardButton(
-                text=f"{session.page + 1}/{page_count}",
-                callback_data="noop",
-            )
-        )
-        if session.page < page_count - 1:
-            nav_buttons.append(
-                InlineKeyboardButton(
-                    text="Еще >>",
-                    callback_data=f"page:{session.session_id}:{session.page + 1}",
-                )
-            )
-        keyboard.row(*nav_buttons)
-
-    return keyboard.as_markup()
-
-
-def _author_results_text(session: AuthorSession) -> str:
-    total_results = len(session.authors)
-    page_count = total_pages(total_results)
-    start = session.page * SEARCH_PAGE_SIZE + 1
-    end = min(total_results, (session.page + 1) * SEARCH_PAGE_SIZE)
-    return (
-        f"<b>Авторы</b>\nПо запросу: <b>{escape(session.query)}</b>\n"
-        f"Показаны {start}-{end} из {total_results}. Страница {session.page + 1}/{page_count}."
-    )
-
-
-def _author_results_keyboard(session: AuthorSession):
-    keyboard = InlineKeyboardBuilder()
-    items = page_items(session.authors, session.page)
-    for item in items:
-        keyboard.row(
-            InlineKeyboardButton(
-                text=item.name[:64],
-                callback_data=f"author:{session.session_id}:{item.author_id}",
-            )
-        )
-
-    page_count = total_pages(len(session.authors))
-    if page_count > 1:
-        nav_buttons: list[InlineKeyboardButton] = []
-        if session.page > 0:
-            nav_buttons.append(
-                InlineKeyboardButton(
-                    text="<< Назад",
-                    callback_data=f"apage:{session.session_id}:{session.page - 1}",
-                )
-            )
-        nav_buttons.append(
-            InlineKeyboardButton(
-                text=f"{session.page + 1}/{page_count}",
-                callback_data="noop",
-            )
-        )
-        if session.page < page_count - 1:
-            nav_buttons.append(
-                InlineKeyboardButton(
-                    text="Еще >>",
-                    callback_data=f"apage:{session.session_id}:{session.page + 1}",
-                )
-            )
-        keyboard.row(*nav_buttons)
-
-    return keyboard.as_markup()
-
-
 def log_startup_config() -> None:
     logger.info(
         "startup flibusta_base_url=%s request_timeout=%ss flibusta_retries=%s "
@@ -1269,89 +1132,6 @@ def _smtp_config_present() -> bool:
     return True
 
 
-def _book_text(details: BookDetails, full_annotation: bool = False) -> str:
-    parts = [f"<b>{escape(details.title)}</b>"]
-    if details.authors:
-        parts.append(escape(", ".join(details.authors[:5])))
-    if details.translators:
-        parts.append(f"Перевод: {escape(', '.join(details.translators[:5]))}")
-    if details.illustrators:
-        parts.append(f"Иллюстрации: {escape(', '.join(details.illustrators[:5]))}")
-
-    meta_parts: list[str] = []
-    if details.genres:
-        meta_parts.append(", ".join(details.genres[:3]))
-    if details.file_size:
-        meta_parts.append(details.file_size)
-    if details.pages:
-        meta_parts.append(f"{details.pages} с.")
-    if meta_parts:
-        parts.append(escape(" · ".join(meta_parts)))
-
-    if details.annotation:
-        annotation = details.annotation
-        if not full_annotation and len(annotation) > settings.book_annotation_max_chars:
-            annotation = annotation[: settings.book_annotation_max_chars - 1].rstrip() + "…"
-        parts.append(escape(annotation))
-    if not details.formats:
-        parts.append("Доступные форматы не найдены.")
-    elif not any(item.code in {"epub", "fb2", "txt", "mobi", "pdf"} for item in details.formats):
-        parts.append("Kindle-совместимый формат не найден.")
-    return "\n\n".join(parts)
-
-
-def _formats_keyboard(details: BookDetails, preferred_format: str | None = None, is_favorite: bool = False):
-    author_buttons = [item for item in details.author_refs[:3] if item.author_id]
-    if not details.formats and not author_buttons:
-        return None
-
-    keyboard = InlineKeyboardBuilder()
-    for item in author_buttons:
-        keyboard.row(
-            InlineKeyboardButton(
-                text=f"Автор: {item.name[:48]}",
-                callback_data=f"bauthor:{item.author_id}",
-            )
-        )
-
-    format_row: list[InlineKeyboardButton] = []
-    formats = sorted(details.formats, key=lambda item: item.code != preferred_format)
-    for item in formats:
-        label = f"⭐ {item.label}" if item.code == preferred_format else item.label
-        format_row.append(InlineKeyboardButton(text=label, callback_data=f"dl:{details.book_id}:{item.code}"))
-        if len(format_row) == 3:
-            keyboard.row(*format_row)
-            format_row = []
-
-    if format_row:
-        keyboard.row(*format_row)
-    kindle_code=next((c for c in [preferred_format,'epub','fb2','txt','mobi','pdf'] if c and any(f.code==c for f in details.formats)),None)
-    if kindle_code:
-        keyboard.row(InlineKeyboardButton(text=f"📤 Отправить {kindle_code.upper()} на Kindle", callback_data=f"kindle:{details.book_id}"))
-    if details.annotation and len(details.annotation) > settings.book_annotation_max_chars:
-        keyboard.row(InlineKeyboardButton(text="Показать всю аннотацию", callback_data=f"annotation:{details.book_id}"))
-    keyboard.row(InlineKeyboardButton(text="✅ В избранном" if is_favorite else "⭐ В избранное", callback_data=f"{'fav_remove' if is_favorite else 'fav_add'}:{details.book_id}"))
-
-    return keyboard.as_markup()
-
-
-def main_reply_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(text=FAVORITES_BUTTON),
-                KeyboardButton(text=HISTORY_BUTTON),
-            ],
-            [
-                KeyboardButton(text=LAST_BUTTON),
-                KeyboardButton(text=KINDLE_BUTTON),
-            ],
-        ],
-        resize_keyboard=True,
-        is_persistent=True,
-        input_field_placeholder="Книга, автор или что хочется почитать",
-    )
-
 
 async def _preferred_format(user_id: int | None) -> str | None:
     if user_id is None:
@@ -1365,60 +1145,6 @@ async def _remember_preferred_format(user_id: int | None, fmt: str) -> None:
         return
     await user_preferences_repo.upsert(user_id, download_format=fmt)
 
-
-def _clean_query(query: str) -> str:
-    cleaned = query.replace("ё", "е").replace("Ё", "Е")
-    cleaned = re.sub(r"[«»\"“”„]+", "", cleaned)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned
-
-
-def _norm(text: str) -> str:
-    text = _clean_query(text).lower()
-    text = re.sub(r"\[[^\]]+\]|\([^)]*\)", "", text)
-    text = re.sub(r"[^a-zа-я0-9]+", " ", text, flags=re.I)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _base_title(title: str) -> str:
-    return re.sub(r"\s*(\[[^\]]+\]|\([^)]*\))", "", title).strip()
-
-
-def _rank_and_dedupe_books(results: list, query: str) -> list:
-    q = _norm(query)
-    deduped = {}
-    for item in results:
-        key = (_norm(_base_title(item.title)), _norm(item.author or ""))
-        current = deduped.get(key)
-        if current is None or _book_score(item, q) > _book_score(current, q):
-            deduped[key] = item
-    return sorted(deduped.values(), key=lambda item: _book_score(item, q), reverse=True)
-
-
-def _book_score(item, q: str) -> tuple[int, int, int]:
-    title = _norm(_base_title(item.title))
-    full = _norm(item.title)
-    return (
-        int(title == q),
-        int(title.startswith(q)),
-        int(q in full),
-    )
-
-
-def _rank_authors(authors: list[AuthorResult], query: str) -> list[AuthorResult]:
-    q = _norm(query)
-    return sorted(authors, key=lambda item: (_norm(item.name) == q, q in _norm(item.name)), reverse=True)
-
-
-def _fallback_queries(query: str) -> list[str]:
-    words = [word for word in re.split(r"\s+", query) if word]
-    candidates = []
-    for size in (4, 3, 2, 1):
-        if len(words) >= size:
-            candidate = " ".join(words[:size])
-            if candidate != query and candidate not in candidates:
-                candidates.append(candidate)
-    return candidates
 
 def _allow_search(user_id: int) -> bool:
     if user_id in settings.admin_ids: return True
@@ -1437,18 +1163,6 @@ async def _send_no_results(message: Message, query: str) -> None:
     kb.row(InlineKeyboardButton(text="Убрать кавычки и повторить",callback_data=f"retry_clean:{sid}"))
     await telegram_retry(lambda: message.answer(f"Ничего не найдено по запросу: <b>{escape(query)}</b>",reply_markup=kb.as_markup()))
 
-def _combined_results_text(query,books,authors):
-    book_lines="\n".join(f"• {escape(b.title)}" + (f" — {escape(b.author)}" if b.author else "") for b in books[:5])
-    author_lines="\n".join(f"• {escape(a.name)}" for a in authors[:5])
-    return f"<b>Нашёл варианты</b>\nПо запросу: <b>{escape(query)}</b>\n\n<b>Книги</b>\n{book_lines}\n\n<b>Авторы</b>\n{author_lines}"
-
-def _combined_results_keyboard(book_session,author_session):
-    kb=InlineKeyboardBuilder()
-    for item in book_session.results[:5]: kb.row(InlineKeyboardButton(text=(item.title if not item.author else f"{item.title} - {item.author}")[:64],callback_data=f"book:{item.book_id}"))
-    for item in author_session.authors[:5]: kb.row(InlineKeyboardButton(text=f"Автор: {item.name}"[:64],callback_data=f"author:{author_session.session_id}:{item.author_id}"))
-    kb.row(InlineKeyboardButton(text="Показать больше книг",callback_data=f"page:{book_session.session_id}:0"),InlineKeyboardButton(text="Показать больше авторов",callback_data=f"apage:{author_session.session_id}:0"))
-    return kb.as_markup()
-
 async def _send_favorites_page(message: Message, user_id: int, page: int, edit: bool=False):
     items=await favorites_repo.list(user_id,limit=8,offset=page*8); count=await favorites_repo.count(user_id)
     if not items:
@@ -1462,14 +1176,6 @@ async def _send_favorites_page(message: Message, user_id: int, page: int, edit: 
     if nav: kb.row(*nav)
     text=f"<b>Избранное</b>\n\nКниг: {count}"
     await (message.edit_text(text,reply_markup=kb.as_markup()) if edit else message.answer(text,reply_markup=kb.as_markup()))
-
-def _history_text(items:list[DownloadHistoryItem],failed:bool=False)->str:
-    if not items: return "<b>Неудачные отправки</b>\n\nПока пусто." if failed else "<b>История</b>\n\nПока пусто."
-    head="<b>Неудачные отправки</b>" if failed else "<b>История</b>"
-    lines=[head]
-    for item in items:
-        lines.append(f"{item.created_at[:16]} — {item.title or item.book_id} [{item.format}] → {item.delivery_target}" + (f" ({item.error})" if failed and item.error else ""))
-    return "\n".join(lines)
 
 async def _notify_admins_about_request(bot: Bot, user: User) -> None:
     kb=InlineKeyboardBuilder()
