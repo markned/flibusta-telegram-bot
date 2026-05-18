@@ -51,7 +51,8 @@ from app.services.cached_flibusta import CachedFlibustaClient
 from app.services.query_analyzer import analyze_query
 from app.services.ai_assistant import AiAssistant
 from app.services.recommendation_packs import get_recommendation_pack
-from app.services.recommendations import is_bad_recommendation_candidate, merge_recommendation_queries
+from app.services.recommendation_filters import is_bad_recommendation_candidate
+from app.services.recommendations import merge_recommendation_queries
 from app.middlewares.access import AccessMiddleware
 from app.state import (
     AuthorSession,
@@ -849,6 +850,12 @@ async def send_search_results(message: Message, query: str) -> None:
         pages=total_pages(len(results)),
         duration=elapsed(started_at),
     )
+    await telegram_retry(
+        lambda: message.answer(
+            _search_results_text(session),
+            reply_markup=_search_results_keyboard(session),
+        )
+    )
 
 async def send_author_title_results(message: Message, author: str, title: str) -> bool:
     """Fast path for obvious 'author + title' queries like 'Лев Толстой исповедь'."""
@@ -1069,7 +1076,7 @@ async def send_ai_results(message: Message, query: str) -> None:
         await _edit_progress(progress, "Похоже, это просьба о подборке. Уточняю варианты…")
         intent = await ai_assistant.understand(query, force_recommend=True)
         if intent.kind != "recommend" or _norm(query) in {_norm(item) for item in intent.search_queries}:
-            fallback = _recommendation_fallback_queries(query)
+            fallback = get_recommendation_pack(query) or _recommendation_fallback_queries(query)
             if fallback:
                 intent = type(intent)("recommend", fallback, "Подбираю книги по теме.", [], "")
             else:
@@ -1088,7 +1095,7 @@ async def send_ai_results(message: Message, query: str) -> None:
         raw_books, raw_authors = await flibusta.search_all(candidate, book_limit=settings.search_results_limit, author_limit=settings.search_results_limit)
         ranked_books = [b for b in _rank_and_dedupe_books(raw_books, candidate) if not (intent.kind=="recommend" and is_bad_recommendation_candidate(b.title,query,intent.negative_keywords))]
         if ranked_books:
-            grouped_books.append(ranked_books[:3] if intent.kind == "recommend" else ranked_books)
+            grouped_books.append(ranked_books[:settings.ai_recommendation_books_per_query] if intent.kind == "recommend" else ranked_books)
         all_authors.extend(_rank_authors(raw_authors, candidate))
         if intent.kind == "recommend":
             for author in _rank_authors(raw_authors, candidate)[:1]:
@@ -1096,7 +1103,7 @@ async def send_ai_results(message: Message, query: str) -> None:
                     _, author_books = await flibusta.author_books(author.author_id, limit=4)
                     if author_books:
                         filtered=[b for b in author_books if not is_bad_recommendation_candidate(b.title,query,intent.negative_keywords)]
-                        if filtered: grouped_books.append(filtered[:3])
+                        if filtered: grouped_books.append(filtered[:settings.ai_recommendation_books_per_query])
                 except FlibustaError:
                     logger.info("Could not expand recommendation author_id=%s", author.author_id)
         if intent.kind=="recommend" and len(_interleave_book_groups(grouped_books))>=settings.ai_recommendation_target_results: break
@@ -1143,6 +1150,8 @@ async def send_ai_results(message: Message, query: str) -> None:
             await message.answer(_author_results_text(session),reply_markup=_author_results_keyboard(session))
         return
     await _edit_progress(progress, "Проверил варианты, но ничего подходящего не нашёл.")
+    if await send_smart_results(message, query, show_no_results=False):
+        return
     await _send_no_results(message, query)
 
 

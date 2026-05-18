@@ -142,8 +142,9 @@ def test_recommendation_pack_german_postmodern():
  assert 'Патрик Зюскинд' in get_recommendation_pack('немецкий постмодерн от первого лица')
 
 def test_bad_recommendation_filter():
- from app.services.recommendations import is_bad_recommendation_candidate
+ from app.services.recommendation_filters import is_bad_recommendation_candidate
  assert is_bad_recommendation_candidate('Инструкция по написанию бестселлера о попаданцах','книга о попаданцах',[])
+ assert not is_bad_recommendation_candidate('Инструкция по резьбе','нужна инструкция',[])
 
 def test_merge_recommendation_queries_dedupes():
  from app.services.recommendations import merge_recommendation_queries
@@ -166,3 +167,99 @@ def test_antiutopia_pack_has_broad_fallback():
  from app.services.recommendation_packs import get_recommendation_pack
  pack=get_recommendation_pack('антиутопия')
  assert {'Оруэлл','Кобо Абэ','Стругацкие'}.issubset(set(pack))
+
+def test_query_analysis_author_name_is_not_recommendation():
+ assert not analyze_query('Эдит Патту').recommendation_like
+ assert analyze_query('Эдит Патту').likely_author
+
+class _FakeUser:
+ def __init__(self,user_id=501): self.id=user_id; self.username='u'; self.full_name='User'
+class _FakeChat:
+ id=777
+class _FakeBot:
+ async def send_chat_action(self,*a,**kw): return None
+class _FakeMessage:
+ def __init__(self,text=''):
+  self.text=text; self.from_user=_FakeUser(); self.chat=_FakeChat(); self.bot=_FakeBot(); self.answers=[]; self.edits=[]
+ async def answer(self,text,*a,**kw): self.answers.append((text,kw)); return self
+ async def edit_text(self,text,*a,**kw): self.edits.append(text); return self
+
+def test_send_search_results_sends_message(monkeypatch):
+ import app.main as main
+ class Flib:
+  async def search(self,q,limit): return [SearchResult('1','Мастер и Маргарита','Михаил Булгаков')]
+ monkeypatch.setattr(main,'flibusta',Flib()); main.search_timestamps.clear()
+ msg=_FakeMessage()
+ run(main.send_search_results(msg,'мастер и маргарита'))
+ assert any('Книги' in text for text,_ in msg.answers)
+
+def test_text_routing_exact_uses_smart_not_ai(monkeypatch):
+ import app.main as main
+ calls=[]
+ async def no_author(*a,**kw): return False
+ async def smart(*a,**kw): calls.append('smart'); return True
+ async def ai(*a,**kw): calls.append('ai')
+ monkeypatch.setattr(main,'send_author_title_results',no_author); monkeypatch.setattr(main,'send_reversed_author_title_results',no_author); monkeypatch.setattr(main,'send_smart_results',smart); monkeypatch.setattr(main,'send_ai_results',ai)
+ run(main.search_text(_FakeMessage('Эдит Патту')))
+ assert calls==['smart']
+
+def test_text_routing_recommendation_uses_ai(monkeypatch):
+ import app.main as main
+ calls=[]
+ async def no_author(*a,**kw): return False
+ async def smart(*a,**kw): calls.append('smart'); return True
+ async def ai(*a,**kw): calls.append('ai')
+ monkeypatch.setattr(main,'send_author_title_results',no_author); monkeypatch.setattr(main,'send_reversed_author_title_results',no_author); monkeypatch.setattr(main,'send_smart_results',smart); monkeypatch.setattr(main,'send_ai_results',ai)
+ run(main.search_text(_FakeMessage('антиутопия')))
+ assert calls==['ai']
+
+def test_reversed_author_title_search_finds_title(monkeypatch):
+ import app.main as main
+ class Flib:
+  async def search(self,q,limit):
+   assert q=='Исповедь'; return [SearchResult('1','Исповедь','Лев Толстой')]
+ monkeypatch.setattr(main,'flibusta',Flib())
+ msg=_FakeMessage()
+ assert run(main.send_reversed_author_title_results(msg,'Исповедь Толстой')) is True
+ assert any('Исповедь' in text for text,_ in msg.answers)
+
+def test_ai_exception_falls_back_to_smart(monkeypatch):
+ import app.main as main
+ calls=[]
+ async def boom(*a,**kw): raise RuntimeError('no ai')
+ async def smart(*a,**kw): calls.append('smart'); return True
+ monkeypatch.setattr(main.ai_assistant,'understand',boom); monkeypatch.setattr(main,'send_smart_results',smart)
+ run(main.send_ai_results(_FakeMessage(),'книга о попаданцах'))
+ assert calls==['smart']
+
+def test_recommendation_filters_bad_literal_and_caps_details(monkeypatch):
+ import app.main as main
+ from app.services.ai_assistant import BookIntent
+ from app.flibusta import BookDetails
+ details_calls=[]
+ class Flib:
+  async def search_all(self,q,book_limit,author_limit):
+   if q=='книга о попаданцах':
+    return [SearchResult('bad','Инструкция по написанию бестселлера о попаданцах','Автор')],[]
+   return [SearchResult(q,q,f'Автор {q}')],[]
+  async def author_books(self,*a,**kw): return ('',[])
+  async def details(self,book_id):
+   details_calls.append(book_id)
+   return BookDetails(book_id=book_id,title=book_id,authors=['Автор'],author_refs=[],translators=[],illustrators=[],genres=[],file_size=None,pages=None,annotation='Описание',formats=[],page_url='x')
+ async def intent(*a,**kw):
+  return BookIntent('recommend',['книга о попаданцах','Артем Каменистый','Константин Муравьев','Владимир Поселягин','Михаил Ланцов','Андрей Круз'],'Подбираю.',[],'')
+ monkeypatch.setattr(main,'flibusta',Flib())
+ monkeypatch.setattr(main.ai_assistant,'understand',intent)
+ monkeypatch.setattr(main.settings,'ai_recommendation_max_details',2)
+ monkeypatch.setattr(main.settings,'ai_recommendation_min_results',2)
+ monkeypatch.setattr(main.settings,'ai_recommendation_target_results',4)
+ msg=_FakeMessage()
+ run(main.send_ai_results(msg,'книга о попаданцах'))
+ assert 'bad' not in details_calls
+ assert len(details_calls)==2
+
+def test_kindle_button_is_not_silent():
+ import app.main as main
+ msg=_FakeMessage('⚙️ Kindle')
+ run(main.search_text(msg))
+ assert msg.answers

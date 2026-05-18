@@ -157,7 +157,9 @@ Rate limits are intentionally small and boring: search is limited per minute in 
 
 ## AI assistant
 
-Любой обычный текст проходит через спокойного помощника поверх обычного поиска. Он не заменяет каталог и не выдумывает наличие книг: превращает человеческую фразу в несколько коротких запросов к Flibusta, после чего бот показывает реальные найденные книги. По умолчанию AI выключен; для включения нужны `AI_ENABLED=true` и `OPENAI_API_KEY`.
+AI-рекомендации — best-effort enhancement поверх обычного поиска. Точные запросы сначала обрабатываются детерминированно; если AI недоступен или даёт слабый план, бот сохраняет обычный поиск. По умолчанию AI выключен; для включения нужны `AI_ENABLED=true` и `OPENAI_API_KEY`.
+
+Настройки recommendation budget: `AI_INTENT_CACHE_TTL_SECONDS`, `AI_RECOMMENDATION_MAX_QUERIES_USED`, `AI_RECOMMENDATION_TARGET_RESULTS`, `AI_RECOMMENDATION_MIN_RESULTS`, `AI_RECOMMENDATION_MAX_DETAILS`, `AI_RECOMMENDATION_BOOKS_PER_QUERY`.
 
 ### Troubleshooting
 - Domain verified but mail is not delivered: check DKIM and SES event history.

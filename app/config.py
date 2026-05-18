@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     ai_recommendation_target_results: int = Field(default=8, alias="AI_RECOMMENDATION_TARGET_RESULTS")
     ai_recommendation_min_results: int = Field(default=5, alias="AI_RECOMMENDATION_MIN_RESULTS")
     ai_recommendation_max_details: int = Field(default=6, alias="AI_RECOMMENDATION_MAX_DETAILS")
+    ai_recommendation_books_per_query: int = Field(default=3, alias="AI_RECOMMENDATION_BOOKS_PER_QUERY")
 
     @property
     def base_url(self) -> str:
