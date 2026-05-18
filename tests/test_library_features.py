@@ -203,15 +203,6 @@ def test_text_routing_author_uses_author_not_ai(monkeypatch):
  run(main.search_text(_FakeMessage('Эдит Патту')))
  assert calls==['author']
 
-def test_text_routing_recommendation_uses_ai(monkeypatch):
- import app.main as main
- calls=[]
- async def no_author(*a,**kw): return False
- async def smart(*a,**kw): calls.append('smart'); return True
- async def ai(*a,**kw): calls.append('ai')
- monkeypatch.setattr(main,'send_author_title_results',no_author); monkeypatch.setattr(main,'send_reversed_author_title_results',no_author); monkeypatch.setattr(main,'send_smart_results',smart); monkeypatch.setattr(main,'send_ai_results',ai)
- run(main.search_text(_FakeMessage('антиутопия')))
- assert calls==['ai']
 
 def test_reversed_author_title_search_finds_title(monkeypatch):
  import app.main as main
@@ -290,14 +281,6 @@ def test_weak_recommendation_anchor_filter():
  assert not is_weak_recommendation_anchor('Пелевин','x')
  assert not is_weak_recommendation_anchor('Подборка стихотворений','x')
 
-def test_text_routing_discovery_optional_uses_discovery(monkeypatch):
- import app.main as main
- calls=[]
- async def discovery(*a,**kw): calls.append(('discovery',a[1])); return True
- async def ai(*a,**kw): calls.append(('ai',a[1]))
- monkeypatch.setattr(main,'send_discovery_results',discovery); monkeypatch.setattr(main,'send_ai_results',ai)
- run(main.search_text(_FakeMessage('подборка хорошего русского постмодерна как Пелевин')))
- assert calls and calls[0][0]=='discovery' and calls[0][1]!='подборка'
 
 def test_exact_title_does_not_call_discovery_or_ai(monkeypatch):
  import app.main as main
@@ -322,3 +305,69 @@ def test_admin_intent_is_admin_only_and_dry_run(monkeypatch):
  other=_FakeMessage(); other.from_user.id=10
  run(main.admin_intent(other,Cmd()))
  assert not other.answers
+
+def test_case_insensitive_author_title_detection():
+ from app.services.intent_router import IntentKind, route_intent
+ for query in ['Исповедь Толстой','исповедь толстой','Толстой Исповедь','толстой исповедь','Идиот Достоевский','идиот достоевский','Преступление и наказание Достоевский','преступление и наказание достоевский']:
+  assert route_intent(query).kind==IntentKind.AUTHOR_TITLE_SEARCH
+
+def test_clarifier_examples_are_neutral():
+ from app.services.intent_router import route_intent
+ from app.services.recommendation_clarifier import build_recommendation_clarification
+ assert 'русского постмодерна' in build_recommendation_clarification('подборка хорошего русского постмодерна как Пелевин',route_intent('подборка хорошего русского постмодерна как Пелевин'))
+ assert 'антиутопий XXI века' in build_recommendation_clarification('антиутопии XXI века',route_intent('антиутопии XXI века'))
+ bdsm=build_recommendation_clarification('хочу почитать пособие для бдсм активностей по типу мастер/слейв',route_intent('хочу почитать пособие для бдсм активностей по типу мастер/слейв'))
+ assert 'БДСМ' in bdsm and '18+' not in bdsm and 'безопас' not in bdsm
+
+def test_recommendation_text_creates_pending_confirmation(monkeypatch):
+ import app.main as main
+ main.pending_recommendations.items.clear(); msg=_FakeMessage('антиутопия')
+ run(main.search_text(msg))
+ assert msg.answers and 'Правильно понял' in msg.answers[-1][0] and main.pending_recommendations.items
+
+def test_exact_search_does_not_create_pending(monkeypatch):
+ import app.main as main
+ calls=[]; main.pending_recommendations.items.clear()
+ async def smart(*a,**kw): calls.append('smart'); return True
+ monkeypatch.setattr(main,'send_smart_results',smart)
+ run(main.search_text(_FakeMessage('Дюна')))
+ assert calls==['smart'] and not main.pending_recommendations.items
+
+class _FakeCallback:
+ def __init__(self,data='book:1',user_id=501):
+  self.data=data; self.from_user=_FakeUser(user_id); self.message=_FakeMessage(); self.message.chat=_FakeChat(); self.answers=[]
+ async def answer(self,*a,**kw): self.answers.append((a,kw))
+
+def test_book_card_callback_opens_book(monkeypatch):
+ import app.main as main
+ from app.flibusta import BookDetails
+ class Flib:
+  async def details(self,book_id): return BookDetails(book_id,'Book',['Author'],[],[],[],[],None,None,'Ann',[], 'x')
+ async def pref(*a): return 'epub'
+ async def upsert(*a,**kw): return None
+ async def exists(*a,**kw): return False
+ monkeypatch.setattr(main,'flibusta',Flib()); monkeypatch.setattr(main,'_preferred_format',pref); monkeypatch.setattr(main.last_books_repo,'upsert',upsert); monkeypatch.setattr(main.favorites_repo,'exists',exists)
+ cb=_FakeCallback()
+ run(main.show_book(cb))
+ assert any('Book' in text for text,_ in cb.message.answers)
+
+def test_pending_callbacks_confirm_exact_cancel(monkeypatch):
+ import app.main as main
+ calls=[]; main.pending_recommendations.items.clear()
+ item=main.pending_recommendations.create(user_id=501,chat_id=777,original_query='антиутопия',intent_kind='recommendation',topic='антиутопия',use_web=False,mode='auto')
+ async def discovery(*a,**kw): calls.append('discovery'); return True
+ monkeypatch.setattr(main,'send_discovery_results',discovery)
+ run(main.confirm_recommendation(_FakeCallback(f'rec_confirm:{item.pending_id}')))
+ assert calls==['discovery']
+ item=main.pending_recommendations.create(user_id=501,chat_id=777,original_query='Дюна',intent_kind='recommendation',topic='Дюна',use_web=False,mode='auto')
+ async def smart(*a,**kw): calls.append('smart'); return True
+ monkeypatch.setattr(main,'send_smart_results',smart)
+ run(main.exact_recommendation(_FakeCallback(f'rec_exact:{item.pending_id}')))
+ assert 'smart' in calls
+ item=main.pending_recommendations.create(user_id=501,chat_id=777,original_query='x',intent_kind='recommendation',topic='x',use_web=False,mode='auto')
+ cb=_FakeCallback(f'rec_cancel:{item.pending_id}')
+ run(main.cancel_recommendation(cb)); assert cb.answers
+
+def test_disabled_literary_provider_returns_empty():
+ from app.services.discovery.literary_sources import DisabledLiterarySourceProvider
+ assert run(DisabledLiterarySourceProvider().find_book_ideas('x',5))==[]

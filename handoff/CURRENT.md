@@ -63,6 +63,12 @@ Risks:
 - centralized discovery web activation behind safe `Settings` properties
 - added config regression tests so `DISCOVERY_*` env vars load without forcing Tavily on
 
+## Completed in this pass
+- fixed broken book-card callback path
+- added confirmation-gated broad recommendations with tiny TTL pending store
+- made author-title routing case-insensitive
+- added neutral recommendation clarifier and disabled literary-source abstraction
+
 ## Intentionally deferred
 - no live Tavily health probe; admin status stays non-networked
 - no durable rate-limit table yet; current in-memory daily counter is deliberately lightweight
