@@ -60,7 +60,7 @@ def test_ai_assistant_parses_structured_queries(monkeypatch):
  from app.services.ai_assistant import AiAssistant
  class Resp:
   def raise_for_status(self): pass
-  def json(self): return {'output_text':'{"kind":"recommend","search_queries":["Пелевин","Сорокин"],"reply":"Вот с чего можно начать."}'}
+  def json(self): return {'output_text':'{"kind":"recommend","search_queries":["Пелевин","Сорокин"],"reply":"Вот с чего можно начать.","negative_keywords":[],"topic":""}'}
  class Client:
   async def __aenter__(self): return self
   async def __aexit__(self,*a): pass
@@ -74,7 +74,7 @@ def test_ai_prompt_requests_russian_search_queries(monkeypatch):
  captured={}
  class Resp:
   def raise_for_status(self): pass
-  def json(self): return {'output_text':'{"kind":"recommend","search_queries":["Пол Остер","Город стекла"],"reply":"Вот с чего можно начать."}'}
+  def json(self): return {'output_text':'{"kind":"recommend","search_queries":["Пол Остер","Город стекла"],"reply":"Вот с чего можно начать.","negative_keywords":[],"topic":""}'}
  class Client:
   async def __aenter__(self): return self
   async def __aexit__(self,*a): pass
@@ -97,7 +97,7 @@ def test_ai_prompt_prefers_foreign_author_queries(monkeypatch):
  captured={}
  class Resp:
   def raise_for_status(self): pass
-  def json(self): return {'output_text':'{"kind":"recommend","search_queries":["Пол Остер","Харуки Мураками"],"reply":"Вот несколько направлений."}'}
+  def json(self): return {'output_text':'{"kind":"recommend","search_queries":["Пол Остер","Харуки Мураками"],"reply":"Вот несколько направлений.","negative_keywords":[],"topic":""}'}
  class Client:
   async def __aenter__(self): return self
   async def __aexit__(self,*a): pass
@@ -132,3 +132,32 @@ def test_recommendation_fallback_queries():
  from app.main import _recommendation_fallback_queries
  assert _recommendation_fallback_queries('Классика российского постмодерна')[:2]==['Пелевин','Сорокин']
  assert _recommendation_fallback_queries('зарубежный известный постмодерн')[0]=='Пол Остер'
+
+def test_recommendation_pack_popadantsy():
+ from app.services.recommendation_packs import get_recommendation_pack
+ assert 'Артем Каменистый' in get_recommendation_pack('книга о попаданцах')
+
+def test_recommendation_pack_german_postmodern():
+ from app.services.recommendation_packs import get_recommendation_pack
+ assert 'Патрик Зюскинд' in get_recommendation_pack('немецкий постмодерн от первого лица')
+
+def test_bad_recommendation_filter():
+ from app.services.recommendations import is_bad_recommendation_candidate
+ assert is_bad_recommendation_candidate('Инструкция по написанию бестселлера о попаданцах','книга о попаданцах',[])
+
+def test_merge_recommendation_queries_dedupes():
+ from app.services.recommendations import merge_recommendation_queries
+ assert merge_recommendation_queries(['Пелевин'],['Пелевин','Сорокин'],6)==['Пелевин','Сорокин']
+
+def test_query_analysis_new_recommendation_patterns():
+ assert analyze_query('книга о попаданцах').recommendation_like
+ assert analyze_query('немецкий постмодерн от первого лица').recommendation_like
+
+def test_ai_intent_cache_hit_avoids_api_call(tmp_path:Path,monkeypatch):
+ from app.services.ai_assistant import AiAssistant, BookIntent
+ db=Database(str(tmp_path/'db.sqlite')); run(db.initialize()); repo=CacheRepository(db)
+ run(repo.set('ai_intent:gpt-5-nano:0:книга о попаданцах','ai_intent',BookIntent('recommend',['Артем Каменистый'],'Готово',[],'попаданцы'),60))
+ def boom(*a,**kw): raise AssertionError('api should not be called')
+ monkeypatch.setattr('app.services.ai_assistant.httpx.AsyncClient',boom)
+ result=run(AiAssistant('key','gpt-5-nano',True,cache_repo=repo).understand('книга о попаданцах'))
+ assert result.search_queries==['Артем Каменистый']

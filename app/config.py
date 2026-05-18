@@ -55,6 +55,11 @@ class Settings(BaseSettings):
     ai_enabled: bool = Field(default=False, alias="AI_ENABLED")
     openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
     ai_model: str = Field(default="gpt-5-nano", alias="AI_MODEL")
+    ai_intent_cache_ttl_seconds: int = Field(default=86400, alias="AI_INTENT_CACHE_TTL_SECONDS")
+    ai_recommendation_max_queries_used: int = Field(default=6, alias="AI_RECOMMENDATION_MAX_QUERIES_USED")
+    ai_recommendation_target_results: int = Field(default=8, alias="AI_RECOMMENDATION_TARGET_RESULTS")
+    ai_recommendation_min_results: int = Field(default=5, alias="AI_RECOMMENDATION_MIN_RESULTS")
+    ai_recommendation_max_details: int = Field(default=6, alias="AI_RECOMMENDATION_MAX_DETAILS")
 
     @property
     def base_url(self) -> str:

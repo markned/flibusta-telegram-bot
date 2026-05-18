@@ -50,6 +50,8 @@ from app.services.kindle_queue import KindleQueue
 from app.services.cached_flibusta import CachedFlibustaClient
 from app.services.query_analyzer import analyze_query
 from app.services.ai_assistant import AiAssistant
+from app.services.recommendation_packs import get_recommendation_pack
+from app.services.recommendations import is_bad_recommendation_candidate, merge_recommendation_queries
 from app.middlewares.access import AccessMiddleware
 from app.state import (
     AuthorSession,
@@ -155,7 +157,7 @@ kindle_queue = KindleQueue(
     max_attempts=settings.kindle_max_job_attempts,
     retry_base_delay_seconds=settings.kindle_retry_base_delay_seconds,
 )
-ai_assistant = AiAssistant(settings.openai_api_key, settings.ai_model, settings.ai_enabled)
+ai_assistant = AiAssistant(settings.openai_api_key, settings.ai_model, settings.ai_enabled,cache_repo=cache_repo,cache_ttl_seconds=settings.ai_intent_cache_ttl_seconds)
 
 
 @router.message(Command("start"))
@@ -639,6 +641,8 @@ async def retry_search(callback: CallbackQuery) -> None:
         return
     if action == "retry_short":
         await send_smart_results(callback.message, " ".join(query.split()[:3]))
+    elif action == "retry_wide":
+        await send_ai_results(callback.message, query)
     elif action == "retry_book":
         await send_search_results(callback.message, query)
     elif action == "retry_author":
@@ -1053,37 +1057,46 @@ async def send_ai_results(message: Message, query: str) -> None:
         if intent.kind != "recommend" or _norm(query) in {_norm(item) for item in intent.search_queries}:
             fallback = _recommendation_fallback_queries(query)
             if fallback:
-                intent = type(intent)("recommend", fallback, "Подбираю книги по теме.")
+                intent = type(intent)("recommend", fallback, "Подбираю книги по теме.", [], "")
             else:
                 await _edit_progress(progress, "Не смог собрать надёжную подборку. Попробуй описать запрос чуть конкретнее.")
                 return
     await _edit_progress(progress, intent.reply)
+    candidate_queries = intent.search_queries
+    if intent.kind == "recommend":
+        candidate_queries = merge_recommendation_queries(intent.search_queries,get_recommendation_pack(query),settings.ai_recommendation_max_queries_used)
     grouped_books = []
     all_authors = []
-    for index, candidate in enumerate(intent.search_queries, start=1):
-        await _edit_progress(progress, f"{intent.reply}\n\nИщу: <b>{escape(candidate)}</b> ({index}/{len(intent.search_queries)})")
+    for index, candidate in enumerate(candidate_queries, start=1):
+        await _edit_progress(progress, f"{intent.reply}\n\nИщу: <b>{escape(candidate)}</b> ({index}/{len(candidate_queries)})")
         raw_books, raw_authors = await flibusta.search_all(candidate, book_limit=settings.search_results_limit, author_limit=settings.search_results_limit)
-        ranked_books = _rank_and_dedupe_books(raw_books, candidate)
+        ranked_books = [b for b in _rank_and_dedupe_books(raw_books, candidate) if not (intent.kind=="recommend" and is_bad_recommendation_candidate(b.title,query,intent.negative_keywords))]
         if ranked_books:
-            grouped_books.append(ranked_books[:2] if intent.kind == "recommend" else ranked_books)
+            grouped_books.append(ranked_books[:3] if intent.kind == "recommend" else ranked_books)
         all_authors.extend(_rank_authors(raw_authors, candidate))
         if intent.kind == "recommend":
             for author in _rank_authors(raw_authors, candidate)[:1]:
                 try:
                     _, author_books = await flibusta.author_books(author.author_id, limit=4)
                     if author_books:
-                        grouped_books.append(author_books[:4])
+                        filtered=[b for b in author_books if not is_bad_recommendation_candidate(b.title,query,intent.negative_keywords)]
+                        if filtered: grouped_books.append(filtered[:3])
                 except FlibustaError:
                     logger.info("Could not expand recommendation author_id=%s", author.author_id)
+        if intent.kind=="recommend" and len(_interleave_book_groups(grouped_books))>=settings.ai_recommendation_target_results: break
     books = _interleave_book_groups(grouped_books) if intent.kind == "recommend" else _dedupe_books_preserving_order([item for group in grouped_books for item in group])
     authors = _dedupe_authors_preserving_order(all_authors)
+    if intent.kind=="recommend" and len(books)<settings.ai_recommendation_min_results:
+        await _edit_progress(progress,"Я не нашёл достаточно точных совпадений.")
+        await _send_weak_recommendation(message,query)
+        return
     if books or authors:
-        label = ", ".join(intent.search_queries)
+        label = ", ".join(candidate_queries)
         if intent.kind == "recommend" and books:
-            selected=books[:10]
+            selected=books[:settings.ai_recommendation_target_results]
             await _edit_progress(progress, "Читаю аннотации для подборки…")
             detailed=[]
-            for book in selected:
+            for book in selected[:settings.ai_recommendation_max_details]:
                 try:
                     detailed.append((book, await flibusta.details(book.book_id)))
                 except FlibustaError:
@@ -1282,6 +1295,13 @@ def _recommendation_fallback_queries(query:str)->list[str]:
     if "российск" in q and "постмодерн" in q: return ["Пелевин","Сорокин","Венедикт Ерофеев"]
     if "зарубеж" in q and "постмодерн" in q: return ["Пол Остер","Харуки Мураками","Марк Данилевский"]
     return []
+
+async def _send_weak_recommendation(message:Message,query:str)->None:
+    sid=uuid4().hex[:10]; retry_sessions[sid]=query; _prune_sessions(retry_sessions)
+    kb=InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="Попробовать шире",callback_data=f"retry_wide:{sid}"))
+    kb.row(InlineKeyboardButton(text="Обычный поиск",callback_data=f"retry_book:{sid}"),InlineKeyboardButton(text="Искать авторов",callback_data=f"retry_author:{sid}"))
+    await message.answer("Я не нашёл достаточно точных совпадений. Могу попробовать шире или выполнить обычный поиск.",reply_markup=kb.as_markup())
 
 async def _edit_progress(message: Message, text: str) -> None:
     try:

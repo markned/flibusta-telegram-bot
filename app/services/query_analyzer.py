@@ -26,7 +26,7 @@ def analyze_query(query:str,max_words:int=12)->QueryAnalysis:
   author=' '.join(kept[:2]); title=' '.join(kept[2:])
  likely=_looks_person(cleaned) and not quoted
  has_marker=bool(re.search(r'\b(?:18|19|20)\d{2}\b|#\d+|\bкн\.?\s*\d+',cleaned,re.I))
- recommendation_like=bool(re.search(r'\b(какой-нибудь|посовет|подбери|похож|классика|известн|зарубежн|мрачн|современн|постмодерн|фантастик)\w*',cleaned,re.I))
+ recommendation_like=bool(re.search(r'\b(книг[аи]?\\s+(о|об|про)|что\\s+почитать\\s+про|какой-нибудь|посовет|подбери|похож|классика|известн|зарубежн|мрачн|современн|постмодерн|попаданц|литрпг|бояр|культивац|антиутоп|киберпанк|хоррор|ужас|детектив|триллер|роман|средневек|историч|магическ|реализм|дневник|исповед|от\\s+первого\\s+лица|фантастик)\w*',cleaned,re.I))
  return QueryAnalysis(original,cleaned,quoted,likely,hint,author,title,has_marker,recommendation_like)
 
 def _looks_person(text:str)->bool:

@@ -3,11 +3,13 @@ from dataclasses import dataclass
 import json
 import httpx
 import logging
+from app.repositories.cache import CacheRepository
+from app.services.search_logic import norm
 logger=logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class BookIntent:
- kind:str; search_queries:list[str]; reply:str
+ kind:str; search_queries:list[str]; reply:str; negative_keywords:list[str]; topic:str
 
 INTENT_SCHEMA={
  'type':'json_schema','name':'book_intent','strict':True,
@@ -15,28 +17,40 @@ INTENT_SCHEMA={
   'type':'object','additionalProperties':False,
   'properties':{
    'kind':{'type':'string','enum':['search','recommend']},
-   'search_queries':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':3},
+   'search_queries':{'type':'array','items':{'type':'string'},'minItems':1,'maxItems':12},
    'reply':{'type':'string'},
+   'negative_keywords':{'type':'array','items':{'type':'string'},'maxItems':8},
+   'topic':{'type':'string'},
   },
-  'required':['kind','search_queries','reply'],
+  'required':['kind','search_queries','reply','negative_keywords','topic'],
  }
 }
 
 class AiAssistant:
- def __init__(self,api_key:str|None,model:str,enabled:bool=False): self.api_key=api_key; self.model=model; self.enabled=enabled and bool(api_key)
+ def __init__(self,api_key:str|None,model:str,enabled:bool=False,cache_repo:CacheRepository|None=None,cache_ttl_seconds:int=86400): self.api_key=api_key; self.model=model; self.enabled=enabled and bool(api_key); self.cache_repo=cache_repo; self.cache_ttl_seconds=cache_ttl_seconds
  async def understand(self,text:str,*,force_recommend:bool=False)->BookIntent:
-  if not self.enabled: return BookIntent('search',[text],'Ищу подходящие варианты.')
+  if not self.enabled: return BookIntent('search',[text],'Ищу подходящие варианты.',[],'')
+  cache_key=f'ai_intent:{self.model}:{int(force_recommend)}:{norm(text)}'
+  if self.cache_repo:
+   try:
+    cached=await self.cache_repo.get(cache_key)
+    if cached: return BookIntent(**cached)
+   except Exception: logger.warning('AI intent cache read failed',exc_info=True)
   prompt='''Ты помощник книжного каталога. Твоя задача — превратить фразу пользователя в 1-3 КОРОТКИХ запроса, которые реально стоит отправить в библиотечный поиск.
 
 Правила:
 - Для точного запроса верни название книги или автора без лишних слов.
 - Для рекомендации верни конкретные поисковые зацепки, которые каталог может найти.
+- Для recommendation верни до 12 разных author/title anchors; для search достаточно до 3.
+- Для жанровых запросов выбирай известных авторов, циклы и книги, которые вероятно есть в русскоязычном каталоге.
 - Для зарубежной литературы предпочитай имена авторов в русском написании; названия книг добавляй только если они достаточно уникальны.
 - Каталог русскоязычный. Все имена авторов и названия книг в search_queries возвращай в общепринятом русском написании, даже если оригинал зарубежный.
 - Не возвращай английские названия вроде "City of Glass" или "Paul Auster", если есть обычная русская форма "Город стекла" и "Пол Остер".
 - Никогда не возвращай исходную длинную фразу целиком, если это рекомендация.
 - Если пользователь просит «классику российского постмодерна», хорошие запросы выглядят как «Пелевин», «Сорокин», «Москва-Петушки», а не как исходное предложение.
 - Если пользователь просит зарубежную литературу, хорошие запросы выглядят как «Пол Остер», «Харуки Мураками», «Марк Данилевский». Не начинай с неоднозначного названия книги, если оно легко даст ложные совпадения.
+- Для «попаданцев» используй якоря: «Артем Каменистый», «Константин Муравьев», «Владимир Поселягин», «Михаил Ланцов», «Андрей Круз», «Сварог Бушков».
+- Для «немецкого постмодерна» используй якоря: «Патрик Зюскинд», «Томас Бернхард», «В. Г. Зебальд», «Петер Хандке», «Эльфрида Елинек», «Гюнтер Грасс».
 - reply — одна короткая естественная фраза на русском, без обещаний того, чего ещё не найдено.'''
   if force_recommend:
    prompt += '\n\nЭто точно запрос на рекомендацию. kind должен быть "recommend". Верни только имена авторов или уникальные названия конкретных книг, не повторяй исходную фразу.'
@@ -46,13 +60,17 @@ class AiAssistant:
     r.raise_for_status(); payload=r.json(); raw=payload.get('output_text') or _extract_text(payload)
   except Exception:
    logger.warning('AI intent request failed; falling back to plain search',exc_info=True)
-   return BookIntent('search',[text],'AI сейчас отвечает медленно. Ищу обычным способом.')
+   return BookIntent('search',[text],'AI сейчас отвечает медленно. Ищу обычным способом.',[],'')
   try:
-   data=json.loads(raw); queries=[str(q).strip() for q in data.get('search_queries',[]) if str(q).strip()][:3]
+   data=json.loads(raw); kind=str(data.get('kind','search')); limit=12 if kind=='recommend' else 3; queries=[str(q).strip() for q in data.get('search_queries',[]) if str(q).strip()][:limit]
    if not queries: raise ValueError('empty queries')
-   return BookIntent(str(data.get('kind','search')),queries,str(data.get('reply') or 'Ищу подходящие варианты.'))
+   result=BookIntent(kind,queries,str(data.get('reply') or 'Ищу подходящие варианты.'),[str(x) for x in data.get('negative_keywords',[])],str(data.get('topic','')))
+   if self.cache_repo:
+    try: await self.cache_repo.set(cache_key,'ai_intent',result,self.cache_ttl_seconds)
+    except Exception: logger.warning('AI intent cache write failed',exc_info=True)
+   return result
   except Exception:
-   return BookIntent('search',[text],'Ищу подходящие варианты.')
+   return BookIntent('search',[text],'Ищу подходящие варианты.',[],'')
 
 def _extract_text(payload):
  out=[]
