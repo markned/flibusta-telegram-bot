@@ -244,6 +244,9 @@ async def author_command(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("recommend"))
 async def recommend_command(message: Message, command: CommandObject) -> None:
+    if not _assistant_ui_enabled():
+        await message.answer("Подборки сейчас отключены. Напиши название книги или автора — я поищу в каталоге.")
+        return
     query=(command.args or "").strip()
     if not query:
         await message.answer("Опиши книгу, автора или настроение — я сам разберу запрос.")
@@ -254,6 +257,9 @@ async def recommend_command(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("discover"))
 async def discover_command(message: Message, command: CommandObject) -> None:
+    if not settings.discovery_enabled:
+        await message.answer("Веб-подборки сейчас отключены. Напиши название книги или автора — я поищу в каталоге.")
+        return
     query=(command.args or "").strip()
     if not query:
         await message.answer("Напиши тему после команды: /discover немецкий постмодерн")
@@ -265,6 +271,9 @@ async def discover_command(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("discover_web"))
 async def discover_web_command(message: Message, command: CommandObject) -> None:
+    if not settings.discovery_enabled:
+        await message.answer("Веб-подборки сейчас отключены. Напиши название книги или автора — я поищу в каталоге.")
+        return
     query=(command.args or "").strip()
     if not query:
         await message.answer("Напиши тему после команды: /discover_web антиутопия")
@@ -1605,14 +1614,25 @@ async def _notify_admins_about_request(bot: Bot, user: User) -> None:
         await telegram_retry(lambda admin_id=admin_id: bot.send_message(admin_id,f"Запрос доступа:\n{label}\n<code>{user.id}</code>",reply_markup=kb.as_markup()))
 
 
+
+def _assistant_ui_enabled() -> bool:
+    return settings.ai_enabled or settings.discovery_enabled
+
+def _assistant_bot_commands() -> list[BotCommand]:
+    commands = [BotCommand(command="recommend", description="подобрать книгу")]
+    if settings.discovery_enabled:
+        commands.extend([
+            BotCommand(command="discover", description="подборка с веб-поиском"),
+            BotCommand(command="discover_web", description="явный веб-поиск"),
+        ])
+    return commands
+
 async def setup_bot_commands(bot: Bot) -> None:
     await bot.set_my_commands(
         [
             BotCommand(command="search", description="поиск книг"),
             BotCommand(command="author", description="поиск авторов"),
-            BotCommand(command="recommend", description="подобрать книгу"),
-            BotCommand(command="discover", description="подборка с веб-поиском"),
-            BotCommand(command="discover_web", description="явный веб-поиск"),
+            *(_assistant_bot_commands() if _assistant_ui_enabled() else []),
             BotCommand(command="kindle_email", description="сохранить Kindle e-mail"),
             BotCommand(command="kindle_help", description="настройка Send to Kindle"),
             BotCommand(command="kindle_setup", description="настройка Kindle"),
