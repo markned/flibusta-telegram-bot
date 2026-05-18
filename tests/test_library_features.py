@@ -371,3 +371,14 @@ def test_pending_callbacks_confirm_exact_cancel(monkeypatch):
 def test_disabled_literary_provider_returns_empty():
  from app.services.discovery.literary_sources import DisabledLiterarySourceProvider
  assert run(DisabledLiterarySourceProvider().find_book_ideas('x',5))==[]
+
+
+def test_recommendation_falls_back_to_smart_when_assistant_disabled(monkeypatch):
+ import app.main as main
+ calls=[]
+ async def smart(*a,**kw): calls.append('smart'); return True
+ monkeypatch.setattr(main.settings,'ai_enabled',False)
+ monkeypatch.setattr(main.settings,'discovery_enabled',False)
+ monkeypatch.setattr(main,'send_smart_results',smart)
+ run(main.search_text(_FakeMessage('антиутопия')))
+ assert calls==['smart']

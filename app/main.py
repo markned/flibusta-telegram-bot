@@ -442,6 +442,9 @@ async def search_text(message: Message) -> None:
         await send_author_results(message, decision.search_query or text)
         return
     if decision.kind in {IntentKind.DISCOVERY_OPTIONAL, IntentKind.RECOMMENDATION}:
+        if not settings.ai_enabled and not settings.discovery_enabled:
+            await send_smart_results(message, text)
+            return
         if settings.recommendation_confirmation_required:
             await ask_recommendation_confirmation(message, text, decision)
             return
