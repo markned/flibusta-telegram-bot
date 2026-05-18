@@ -7,3 +7,8 @@ def is_bad_recommendation_candidate(title:str,query:str,negative_keywords:list[s
  if any(norm(k) in text for k in negative_keywords): return True
  if any(word in q for word in EXPLICIT_MANUAL_STEMS): return False
  return any(norm(word) in text for word in BAD_TITLE_STEMS)
+
+WEAK_ANCHORS={'подборка','подбери','посоветуй','порекомендуй','книга','книги','литература','хорошего','хорошая книга','что почитать','похожее','типа','как','автор','авторы','роман'}
+def is_weak_recommendation_anchor(anchor:str,original_query:str)->bool:
+ text=norm(anchor)
+ return text in {norm(item) for item in WEAK_ANCHORS}

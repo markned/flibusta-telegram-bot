@@ -49,9 +49,10 @@ from app.services.kindle import KindleService
 from app.services.kindle_queue import KindleQueue
 from app.services.cached_flibusta import CachedFlibustaClient
 from app.services.query_analyzer import analyze_query
+from app.services.intent_router import IntentKind, route_intent
 from app.services.ai_assistant import AiAssistant
 from app.services.recommendation_packs import get_recommendation_pack
-from app.services.recommendation_filters import is_bad_recommendation_candidate
+from app.services.recommendation_filters import is_bad_recommendation_candidate, is_weak_recommendation_anchor
 from app.services.recommendations import merge_recommendation_queries
 from app.services.discovery.idea_generator import BookIdeaGenerator
 from app.services.discovery.flibusta_matcher import FlibustaMatcher
@@ -386,14 +387,25 @@ async def search_text(message: Message) -> None:
     if text == KINDLE_BUTTON:
         await message.answer("Kindle: /kindle — меню, /kindle_setup — настройка.")
         return
-    analysis = analyze_query(text)
-    if analysis.author_part and analysis.title_part:
-        if await send_author_title_results(message, analysis.author_part, analysis.title_part):
+    decision = route_intent(text)
+    logger.info("intent=%s confidence=%.2f reasons=%s", decision.kind.value, decision.confidence, ",".join(decision.reasons))
+    if decision.kind == IntentKind.AUTHOR_TITLE_SEARCH:
+        if await send_author_title_results(message, decision.author_part or "", decision.title_part or ""):
             return
-    if await send_reversed_author_title_results(message, text):
+        if await send_reversed_author_title_results(message, text):
+            return
+        await send_smart_results(message, text)
         return
-    if analysis.recommendation_like:
-        await send_ai_results(message, text)
+    if decision.kind == IntentKind.AUTHOR_SEARCH:
+        await send_author_results(message, decision.search_query or text)
+        return
+    if decision.kind == IntentKind.DISCOVERY_OPTIONAL:
+        if await send_discovery_results(message, decision.topic or text, mode="auto", use_web=settings.discovery_use_web):
+            return
+        await send_ai_results(message, text, topic=decision.topic, intent=decision.kind.value)
+        return
+    if decision.kind == IntentKind.RECOMMENDATION:
+        await send_ai_results(message, text, topic=decision.topic, intent=decision.kind.value)
         return
     await send_smart_results(message, text)
 
@@ -1158,11 +1170,11 @@ async def send_discovery_results(message: Message, query: str, *, mode: str, use
     await message.answer("\n".join(lines), reply_markup=_search_results_keyboard(session))
     return True
 
-async def send_ai_results(message: Message, query: str) -> None:
+async def send_ai_results(message: Message, query: str, *, topic: str | None = None, intent: str | None = None) -> None:
     progress = await message.answer("Разбираю запрос…")
     analysis = analyze_query(query)
     try:
-        intent = await ai_assistant.understand(query)
+        intent = await ai_assistant.understand(query, topic=topic, intent=intent)
     except Exception:
         logger.exception("AI search preparation failed")
         intent = None
@@ -1172,7 +1184,7 @@ async def send_ai_results(message: Message, query: str) -> None:
         return
     if analysis.recommendation_like and (intent.kind != "recommend" or _norm(query) in {_norm(item) for item in intent.search_queries}):
         await _edit_progress(progress, "Похоже, это просьба о подборке. Уточняю варианты…")
-        intent = await ai_assistant.understand(query, force_recommend=True)
+        intent = await ai_assistant.understand(query, force_recommend=True, topic=topic, intent=intent)
         if intent.kind != "recommend" or _norm(query) in {_norm(item) for item in intent.search_queries}:
             fallback = get_recommendation_pack(query) or _recommendation_fallback_queries(query)
             if fallback:
@@ -1185,7 +1197,9 @@ async def send_ai_results(message: Message, query: str) -> None:
     await _edit_progress(progress, intent.reply)
     candidate_queries = intent.search_queries
     if intent.kind == "recommend":
-        candidate_queries = merge_recommendation_queries(intent.search_queries,get_recommendation_pack(query),settings.ai_recommendation_max_queries_used)
+        candidate_queries = merge_recommendation_queries([item for item in intent.search_queries if not is_weak_recommendation_anchor(item, query)],get_recommendation_pack(topic or query),settings.ai_recommendation_max_queries_used)
+        if not candidate_queries and topic:
+            candidate_queries = [topic]
     grouped_books = []
     all_authors = []
     for index, candidate in enumerate(candidate_queries, start=1):

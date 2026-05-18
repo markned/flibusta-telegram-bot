@@ -28,9 +28,9 @@ INTENT_SCHEMA={
 
 class AiAssistant:
  def __init__(self,api_key:str|None,model:str,enabled:bool=False,cache_repo:CacheRepository|None=None,cache_ttl_seconds:int=86400): self.api_key=api_key; self.model=model; self.enabled=enabled and bool(api_key); self.cache_repo=cache_repo; self.cache_ttl_seconds=cache_ttl_seconds
- async def understand(self,text:str,*,force_recommend:bool=False)->BookIntent:
+ async def understand(self,text:str,*,force_recommend:bool=False,topic:str|None=None,intent:str|None=None)->BookIntent:
   if not self.enabled: return BookIntent('search',[text],'Ищу подходящие варианты.',[],'')
-  cache_key=f'ai_intent:{self.model}:{int(force_recommend)}:{norm(text)}'
+  cache_key=(f'ai_intent:{self.model}:{int(force_recommend)}:{norm(text)}' if topic is None and intent is None else f'ai_intent:{self.model}:{int(force_recommend)}:{norm(topic or text)}:{intent or ""}')
   if self.cache_repo:
    try:
     cached=await self.cache_repo.get(cache_key)
@@ -47,6 +47,7 @@ class AiAssistant:
 - Каталог русскоязычный. Все имена авторов и названия книг в search_queries возвращай в общепринятом русском написании, даже если оригинал зарубежный.
 - Не возвращай английские названия вроде "City of Glass" или "Paul Auster", если есть обычная русская форма "Город стекла" и "Пол Остер".
 - Никогда не возвращай исходную длинную фразу целиком, если это рекомендация.
+- Никогда не используй как search_queries общие слова-инструкции: «подборка», «книга», «книги», «литература», «хорошего», «что почитать».
 - Если пользователь просит «классику российского постмодерна», хорошие запросы выглядят как «Пелевин», «Сорокин», «Москва-Петушки», а не как исходное предложение.
 - Если пользователь просит зарубежную литературу, хорошие запросы выглядят как «Пол Остер», «Харуки Мураками», «Марк Данилевский». Не начинай с неоднозначного названия книги, если оно легко даст ложные совпадения.
 - Для «попаданцев» используй якоря: «Артем Каменистый», «Константин Муравьев», «Владимир Поселягин», «Михаил Ланцов», «Андрей Круз», «Сварог Бушков».
@@ -56,7 +57,7 @@ class AiAssistant:
    prompt += '\n\nЭто точно запрос на рекомендацию. kind должен быть "recommend". Верни только имена авторов или уникальные названия конкретных книг, не повторяй исходную фразу.'
   try:
    async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as client:
-    r=await client.post('https://api.openai.com/v1/responses',headers={'Authorization':f'Bearer {self.api_key}'},json={'model':self.model,'instructions':prompt,'input':text,'text':{'format':INTENT_SCHEMA}})
+    r=await client.post('https://api.openai.com/v1/responses',headers={'Authorization':f'Bearer {self.api_key}'},json={'model':self.model,'instructions':prompt,'input':f'Исходный запрос: {text}\nТема для поиска: {topic or text}\nIntent: {intent or ""}','text':{'format':INTENT_SCHEMA}})
     r.raise_for_status(); payload=r.json(); raw=payload.get('output_text') or _extract_text(payload)
   except Exception:
    logger.warning('AI intent request failed; falling back to plain search',exc_info=True)

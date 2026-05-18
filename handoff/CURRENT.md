@@ -8,29 +8,27 @@
 
 ## Current task plan
 Files likely to change:
-- `app/main.py`, `app/config.py`
-- `app/services/discovery/*`
-- `.env.example`, `README.md`
-- focused discovery tests
+- `app/main.py`
+- `app/services/intent_router.py`
+- `app/services/ai_assistant.py`
+- `app/services/recommendation_filters.py`
+- focused routing tests
 
 Tests to add/update:
-- Tavily request/parse/error handling without network
-- `/recommend` stays offline by default
-- `/discover` web gating, cache, and safe fallback
-- unmatched ideas never render as recommendations
-- matched `book_id` results are deduped and bad titles filtered
-- admin discovery status hides secrets
+- recommendation instructions route automatically
+- exact title `Подборка стихотворений` remains exact
+- author and author-title examples route deterministically
+- weak recommendation anchors are rejected
+- exact title path never calls AI/discovery
 
 Expected behavior:
-- recommendations may use cheap model/web discovery, but only catalog matches reach users
-- normal exact search remains deterministic and web-free
-- web discovery is cached, rate-limited, and one-request-per-command by default
-- all fan-out stays explicitly capped for a low-memory VPS
+- free text auto-routes without requiring slash commands
+- instruction word `подборка` never becomes a recommendation search anchor
+- exact titles and author searches remain web-free and deterministic
 
 Risks:
-- web snippets are noisy; matching must remain conservative
-- personal cache keys can fragment if profile data grows
-- too much command integration could duplicate the existing AI recommendation path
+- cheap heuristics can misclassify uncommon two-word titles
+- recommendation topic stripping must stay conservative
 
 ## Current guardrails
 - low-memory VPS target
@@ -54,6 +52,11 @@ Risks:
 - added discovery cache keys, in-memory daily web limits, and concurrency cap
 - added safe `/admin_discovery_status`
 - documented Tavily env flags and added mocked discovery tests
+- added deterministic intent router and recommendation topic extraction
+- routed free text through exact/author/author-title/recommendation/discovery decisions
+- filtered generic recommendation anchors before AI expansion
+- passed cleaned recommendation context into AI planner
+- preserved exact title handling for `Подборка стихотворений`
 
 ## Intentionally deferred
 - no live Tavily health probe; admin status stays non-networked
