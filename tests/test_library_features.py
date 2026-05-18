@@ -68,3 +68,10 @@ def test_ai_assistant_parses_structured_queries(monkeypatch):
  monkeypatch.setattr('app.services.ai_assistant.httpx.AsyncClient', lambda timeout: Client())
  result=run(AiAssistant('key','gpt-5-nano',True).understand('Хочу классику российского постмодерна'))
  assert result.search_queries==['Пелевин','Сорокин']
+
+def test_access_user_management(tmp_path:Path):
+ from app.repositories.access import AccessRepository
+ db=Database(str(tmp_path/'db.sqlite')); run(db.initialize()); repo=AccessRepository(db)
+ run(repo.ensure_user(7,'approved',1)); assert run(repo.count_by_status())['approved']==1
+ run(repo.ensure_user(7,'blocked',1)); assert run(repo.get_user(7)).status=='blocked'
+ assert run(repo.delete_user(7))==1

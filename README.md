@@ -92,6 +92,7 @@ If SES is still in sandbox, sending may work only to verified recipient addresse
 Then use `📤 Send to Kindle` in a book card.
 
 Kindle commands:
+- `/kindle`
 - `/kindle_email`
 - `/kindle_help`
 - `/kindle_status`
@@ -130,6 +131,8 @@ Kindle sending uses a lightweight in-process async queue. It keeps Telegram resp
 - Series support is scaffolded in the data model, but the button stays hidden until Flibusta exposes reliable data for a book.
 
 Admin product commands:
+- `/admin` — компактная панель управления;
+- `/admin_user_add <id>` / `/admin_user_remove <id>`;
 - `/admin_stats`
 - `/admin_cache_stats`
 - `/admin_cache_clear`
@@ -141,6 +144,8 @@ Rate limits are intentionally small and boring: search is limited per minute in 
 ## Access control
 
 При `ACCESS_CONTROL_ENABLED=true` новый пользователь не попадает в библиотеку сразу: `/start` создаёт запрос, а админ получает кнопки «Разрешить / Отклонить». Для доверенных людей можно создать deep-link командой `/invite`; состояние хранится в SQLite.
+
+В `/admin` есть быстрый обзор, заявки, список пользователей, блокировка/удаление, инвайты, статистика и очистка просроченного кэша.
 
 ## AI assistant
 

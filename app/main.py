@@ -33,6 +33,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.config import Settings
 from app.flibusta import AuthorResult, BookDetails, FlibustaClient, FlibustaError
 from app.handlers.kindle import build_kindle_router, user_message_for_exception
+from app.handlers.admin import build_admin_router
 from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
 from app.repositories.db import Database
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository
@@ -312,7 +313,6 @@ async def search_text(message: Message) -> None:
     if text == LAST_BUTTON:
         await last_command(message); return
     if text == KINDLE_BUTTON:
-        await message.answer("Kindle: /kindle_setup · /kindle_status · /kindle_history")
         return
     await send_ai_results(message, text)
 
@@ -1327,7 +1327,7 @@ def _formats_keyboard(details: BookDetails, preferred_format: str | None = None,
         keyboard.row(*format_row)
     kindle_code=next((c for c in [preferred_format,'epub','fb2','txt','mobi','pdf'] if c and any(f.code==c for f in details.formats)),None)
     if kindle_code:
-        keyboard.row(InlineKeyboardButton(text=f"📤 Send {kindle_code.upper()} to Kindle", callback_data=f"kindle:{details.book_id}"))
+        keyboard.row(InlineKeyboardButton(text=f"📤 Отправить {kindle_code.upper()} на Kindle", callback_data=f"kindle:{details.book_id}"))
     if details.annotation and len(details.annotation) > settings.book_annotation_max_chars:
         keyboard.row(InlineKeyboardButton(text="Показать всю аннотацию", callback_data=f"annotation:{details.book_id}"))
     keyboard.row(InlineKeyboardButton(text="✅ В избранном" if is_favorite else "⭐ В избранное", callback_data=f"{'fav_remove' if is_favorite else 'fav_add'}:{details.book_id}"))
@@ -1494,11 +1494,13 @@ async def setup_bot_commands(bot: Bot) -> None:
             BotCommand(command="kindle_history", description="история Kindle"),
             BotCommand(command="kindle_format", description="формат Kindle"),
             BotCommand(command="kindle_retry", description="повторить Kindle"),
+            BotCommand(command="kindle", description="меню Kindle"),
             BotCommand(command="favorites", description="избранные книги"),
             BotCommand(command="history", description="история отправок"),
             BotCommand(command="history_failed", description="неудачные отправки"),
             BotCommand(command="last", description="последняя книга"),
             BotCommand(command="start", description="открыть меню"),
+            BotCommand(command="admin", description="админка"),
         ]
     )
 
@@ -1541,6 +1543,17 @@ async def main() -> None:
             admin_user_ids=settings.admin_ids,
             retention_days=settings.kindle_delivery_log_retention_days,
             export_include_full_emails=settings.admin_export_include_full_emails,
+        )
+    )
+    dispatcher.include_router(
+        build_admin_router(
+            access_repo=access_repo,
+            cache_repo=cache_repo,
+            history_repo=download_history_repo,
+            favorites_repo=favorites_repo,
+            deliveries_repo=kindle_deliveries_repo,
+            kindle_queue=kindle_queue,
+            admin_ids=settings.admin_ids,
         )
     )
     dispatcher.include_router(router)

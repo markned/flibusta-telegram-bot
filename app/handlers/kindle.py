@@ -14,7 +14,7 @@ from app.repositories.db import Database
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository, KindleDelivery
 from app.repositories.kindle_settings import KindleSettingsRepository
 from app.repositories.user_preferences import UserPreferencesRepository
-from app.messages.kindle import kindle_setup_text, kindle_missing_email_text
+from app.messages.kindle import kindle_setup_text, kindle_missing_email_text, kindle_home_text
 from app.services.email_sender import EmailConfigurationError
 from app.services.kindle import (
     KindleConversionNotAvailableError,
@@ -51,11 +51,15 @@ def build_kindle_router(
 ) -> Router:
     router = Router()
 
+    async def send_kindle_home(message: Message, user_id: int | None = None) -> None:
+        settings = await settings_repo.get(user_id or message.from_user.id)
+        await message.answer(kindle_home_text(settings, smtp_from_email), reply_markup=_kindle_home_keyboard(settings is not None))
+
     @router.message(Command("kindle_email"))
     async def kindle_email(message: Message, command: CommandObject) -> None:
         raw = (command.args or "").strip()
         if not raw:
-            await message.answer("Use: <code>/kindle_email your_name@kindle.com</code>")
+            await message.answer("Сохрани адрес так:\n<code>/kindle_email your_name@kindle.com</code>")
             return
         try:
             normalized = validate_kindle_email(raw)
@@ -66,43 +70,36 @@ def build_kindle_router(
         preferred = current.preferred_kindle_format if current else default_format
         await settings_repo.upsert(message.from_user.id, normalized, preferred_format=preferred)
         await preferences_repo.upsert(message.from_user.id, kindle_format=preferred)
-        await message.answer(f"Kindle e-mail saved: {mask_email(normalized)}")
+        await message.answer(f"Kindle-адрес сохранён: {mask_email(normalized)}")
+        await send_kindle_home(message)
 
     @router.message(Command("kindle_help"))
     async def kindle_help(message: Message) -> None:
-        sender = smtp_from_email or "not configured by admin yet"
-        await message.answer(
-            "Send to Kindle setup:\n"
-            "1. Find your Kindle e-mail in Amazon Kindle settings.\n"
-            f"2. Add <code>{escape(sender)}</code> to Amazon Approved Personal Document E-mail List.\n"
-            "3. Save your Kindle e-mail with <code>/kindle_email your_name@kindle.com</code>.\n"
-            "4. Use the «📤 Send to Kindle» button in a book card.\n\n"
-            f"The sender address Amazon must approve is: <code>{escape(sender)}</code>."
-        )
+        await message.answer(kindle_setup_text(smtp_from_email))
     @router.message(Command("kindle_setup"))
     async def kindle_setup(message: Message) -> None:
         await message.answer(kindle_setup_text(smtp_from_email))
+
+    @router.message(Command("kindle"))
+    async def kindle_home(message: Message) -> None:
+        await send_kindle_home(message)
+    @router.message(F.text == "⚙️ Kindle")
+    async def kindle_home_button(message: Message) -> None:
+        await send_kindle_home(message)
 
     @router.message(Command("kindle_status"))
     async def kindle_status(message: Message) -> None:
         settings = await settings_repo.get(message.from_user.id)
         if settings is None:
-            await message.answer(
-                "Kindle e-mail is not configured yet. Use "
-                "<code>/kindle_email your_name@kindle.com</code>."
-            )
+            await send_kindle_home(message)
             return
-        sender = smtp_from_email or "not configured"
-        await message.answer(
-            f"Kindle e-mail: {mask_email(settings.kindle_email)}\n"
-            f"Preferred format: {escape(settings.preferred_kindle_format)}\n"
-            f"Amazon-approved sender: <code>{escape(sender)}</code>"
-        )
+        await send_kindle_home(message)
 
     @router.message(Command("kindle_remove"))
     async def kindle_remove(message: Message) -> None:
         await settings_repo.delete(message.from_user.id)
-        await message.answer("Kindle e-mail removed.")
+        await message.answer("Kindle-адрес удалён.")
+        await send_kindle_home(message)
 
     @router.message(Command("kindle_format"))
     async def kindle_format(message: Message, command: CommandObject) -> None:
@@ -111,29 +108,29 @@ def build_kindle_router(
         current = settings.preferred_kindle_format if settings else default_format
         if not raw:
             await message.answer(
-                f"Current Kindle format: <b>{escape(current)}</b>\n"
-                "Allowed: epub, fb2, txt, pdf.\n"
-                "EPUB is recommended for Kindle."
+                f"Текущий формат Kindle: <b>{escape(current.upper())}</b>\n"
+                "Доступны: epub, fb2, txt, pdf.\n"
+                "Для Kindle лучше всего EPUB."
             )
             return
         if raw not in ALLOWED_KINDLE_FORMATS:
-            await message.answer("Allowed Kindle formats: epub, fb2, txt, pdf. EPUB is recommended.")
+            await message.answer("Доступны форматы: epub, fb2, txt, pdf. Для Kindle лучше EPUB.")
             return
         if settings is None:
             await message.answer(
-                "Kindle e-mail is not configured yet. Use "
-                "<code>/kindle_email your_name@kindle.com</code> first."
+                "Сначала настрой Kindle-адрес: "
+                "<code>/kindle_email your_name@kindle.com</code>"
             )
             return
         await settings_repo.update_preferred_format(message.from_user.id, raw)
         await preferences_repo.upsert(message.from_user.id, kindle_format=raw)
-        await message.answer(f"Preferred Kindle format saved: {escape(raw)}. EPUB is recommended.")
+        await message.answer(f"Формат Kindle сохранён: {escape(raw.upper())}.")
 
     @router.message(Command("kindle_history"))
     async def kindle_history(message: Message) -> None:
         items = await deliveries_repo.get_recent_for_user(message.from_user.id, limit=10)
         if not items:
-            await message.answer("No Kindle deliveries yet.")
+            await message.answer("Отправок на Kindle пока не было.")
             return
         await message.answer(format_history(items))
     @router.message(Command("kindle_retry"))
@@ -141,10 +138,10 @@ def build_kindle_router(
         arg=(command.args or '').strip()
         old=await (deliveries_repo.get_by_id(int(arg)) if arg.isdigit() else deliveries_repo.get_latest_failed_for_user(message.from_user.id))
         if old is None or old.user_id != message.from_user.id:
-            await message.answer("No failed Kindle delivery found to retry."); return
+            await message.answer("Не нашёл неудачную отправку для повтора."); return
         if old.status != 'failed':
-            await message.answer("Only failed deliveries can be retried."); return
-        status=await message.answer("Queued for Kindle…")
+            await message.answer("Повторять можно только неудачные отправки."); return
+        status=await message.answer("Добавил в очередь Kindle…")
         try: await kindle_queue.enqueue(user_id=old.user_id,chat_id=message.chat.id,book_id=old.book_id,status_message_id=status.message_id,retry_of_delivery_id=old.id)
         except Exception as exc: await status.edit_text(user_message_for_exception(exc))
 
@@ -199,11 +196,11 @@ def build_kindle_router(
         settings = await settings_repo.get(callback.from_user.id)
         if settings is None:
             await callback.answer()
-            kb=InlineKeyboardBuilder(); kb.row(InlineKeyboardButton(text="How to set up Kindle",callback_data="kindle_setup_help"),InlineKeyboardButton(text="Show sender e-mail",callback_data="kindle_sender"))
+            kb=InlineKeyboardBuilder(); kb.row(InlineKeyboardButton(text="Настроить Kindle",callback_data="kindle_setup_help"),InlineKeyboardButton(text="Показать отправителя",callback_data="kindle_sender"))
             await callback.message.answer(kindle_missing_email_text(),reply_markup=kb.as_markup())
             return
-        await callback.answer("Added to Kindle queue")
-        status = await callback.message.answer("Queued for Kindle…")
+        await callback.answer("Добавил в очередь Kindle")
+        status = await callback.message.answer("Добавил в очередь Kindle…")
         try:
             await kindle_queue.enqueue(
                 user_id=callback.from_user.id,
@@ -218,26 +215,36 @@ def build_kindle_router(
     @router.callback_query(F.data=="kindle_setup_help")
     async def setup_help_cb(callback:CallbackQuery): await callback.answer(); await callback.message.answer(kindle_setup_text(smtp_from_email))
     @router.callback_query(F.data=="kindle_sender")
-    async def sender_cb(callback:CallbackQuery): await callback.answer(); await callback.message.answer(smtp_from_email or "Kindle sending is not configured by the bot owner yet.")
+    async def sender_cb(callback:CallbackQuery): await callback.answer(); await callback.message.answer(smtp_from_email or "Отправка на Kindle пока не настроена владельцем бота.")
+    @router.callback_query(F.data=="kindle_home")
+    async def home_cb(callback:CallbackQuery): await callback.answer(); await send_kindle_home(callback.message, callback.from_user.id)
+    @router.callback_query(F.data=="kindle_history_home")
+    async def history_cb(callback:CallbackQuery): await callback.answer(); items=await deliveries_repo.get_recent_for_user(callback.from_user.id,limit=10); await callback.message.answer(format_history(items) if items else "Отправок на Kindle пока не было.")
+    @router.callback_query(F.data.startswith("kindle_fmt:"))
+    async def fmt_cb(callback:CallbackQuery):
+        await callback.answer()
+        value=callback.data.split(":",1)[1]; settings=await settings_repo.get(callback.from_user.id)
+        if settings is None: await callback.message.answer(kindle_missing_email_text()); return
+        await settings_repo.update_preferred_format(callback.from_user.id,value); await preferences_repo.upsert(callback.from_user.id,kindle_format=value); await callback.message.answer(f"Формат Kindle сохранён: {value.upper()}.")
     return router
 
 
 def user_message_for_exception(exc: Exception) -> str:
     if isinstance(exc, KindleSettingsMissingError):
-        return "Kindle e-mail is not configured yet. Use /kindle_email your_name@kindle.com"
+        return "Kindle пока не настроен. Нажми ⚙️ Kindle и сохрани адрес."
     if isinstance(exc, KindleFileTooLargeError):
-        return "This file is too large to send to Kindle by e-mail. Try another format."
+        return "Файл слишком большой для отправки на Kindle. Попробуй другой формат."
     if isinstance(exc, KindleRateLimitError):
-        return "You reached the Kindle sending limit for this hour. Try again later."
+        return "Лимит отправок на Kindle на этот час исчерпан. Попробуй позже."
     if isinstance(exc, KindleConversionNotAvailableError):
-        return "This format is not ready for Kindle delivery yet. Try another format."
+        return "Этот формат пока не готов для Kindle. Попробуй другой."
     if isinstance(exc,(SMTPAuthenticationError,EmailConfigurationError,SMTPRecipientsRefused,SMTPResponseException)):
         return smtp_user_message(classify_smtp_error(exc))
-    return "Failed to send this book to Kindle. Try again later."
+    return "Не удалось отправить книгу на Kindle. Попробуй позже."
 
 
 def format_history(items: list[KindleDelivery]) -> str:
-    lines = ["Last Kindle deliveries:"]
+    lines = ["Последние отправки на Kindle:"]
     for item in items:
         stamp = _short_datetime(item.created_at)
         title = item.title or f"book {item.book_id}"
@@ -259,3 +266,12 @@ def _short_datetime(value: str) -> str:
 def _short_error(value: str, limit: int = 80) -> str:
     clean = " ".join(value.split())
     return clean[: limit - 3] + "..." if len(clean) > limit else clean
+
+def _kindle_home_keyboard(configured: bool):
+    kb=InlineKeyboardBuilder()
+    if not configured:
+        kb.row(InlineKeyboardButton(text="Как настроить",callback_data="kindle_setup_help"),InlineKeyboardButton(text="Отправитель",callback_data="kindle_sender"))
+    else:
+        kb.row(InlineKeyboardButton(text="История",callback_data="kindle_history_home"),InlineKeyboardButton(text="Как настроить",callback_data="kindle_setup_help"))
+        kb.row(InlineKeyboardButton(text="EPUB",callback_data="kindle_fmt:epub"),InlineKeyboardButton(text="FB2",callback_data="kindle_fmt:fb2"),InlineKeyboardButton(text="TXT",callback_data="kindle_fmt:txt"))
+    return kb.as_markup()

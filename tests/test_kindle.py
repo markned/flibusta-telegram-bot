@@ -218,7 +218,7 @@ def test_queue_enqueue_behavior(tmp_path: Path) -> None:
 
 
 def test_user_facing_error_mapping() -> None:
-    assert "too large" in user_message_for_exception(KindleFileTooLargeError()).lower()
+    assert "слишком большой" in user_message_for_exception(KindleFileTooLargeError()).lower()
     assert "temporarily unavailable" in user_message_for_exception(EmailConfigurationError()).lower()
 
 
