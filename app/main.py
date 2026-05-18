@@ -1004,11 +1004,13 @@ async def send_smart_results(message: Message, query: str) -> None:
     await _send_no_results(message, query)
 
 async def send_ai_results(message: Message, query: str) -> None:
+    progress = await message.answer("Разбираю запрос…")
     intent = await ai_assistant.understand(query)
-    await message.answer(intent.reply)
+    await _edit_progress(progress, intent.reply)
     grouped_books = []
     all_authors = []
-    for candidate in intent.search_queries:
+    for index, candidate in enumerate(intent.search_queries, start=1):
+        await _edit_progress(progress, f"{intent.reply}\n\nИщу: <b>{escape(candidate)}</b> ({index}/{len(intent.search_queries)})")
         raw_books, raw_authors = await flibusta.search_all(candidate, book_limit=settings.search_results_limit, author_limit=settings.search_results_limit)
         ranked_books = _rank_and_dedupe_books(raw_books, candidate)
         if ranked_books:
@@ -1020,18 +1022,23 @@ async def send_ai_results(message: Message, query: str) -> None:
         label = ", ".join(intent.search_queries)
         if intent.kind == "recommend" and books:
             session=_create_search_session(message.from_user.id,message.chat.id,label,books,title=_recommendation_text(query,len(books)))
+            await _edit_progress(progress, "Собрал подборку.")
             await message.answer(_search_results_text(session),reply_markup=_search_results_keyboard(session))
             return
         if books and authors:
             bs=_create_search_session(message.from_user.id,message.chat.id,label,books); aus=_create_author_session(message.from_user.id,message.chat.id,label,authors)
+            await _edit_progress(progress, "Нашёл несколько направлений.")
             await message.answer(_combined_results_text(label,books,authors),reply_markup=_combined_results_keyboard(bs,aus))
         elif books:
             session=_create_search_session(message.from_user.id,message.chat.id,label,books,title=f"<b>Подобрал варианты</b>\nПо запросам: <b>{escape(label)}</b>")
+            await _edit_progress(progress, "Нашёл книги.")
             await message.answer(_search_results_text(session),reply_markup=_search_results_keyboard(session))
         else:
             session=_create_author_session(message.from_user.id,message.chat.id,label,authors)
+            await _edit_progress(progress, "Нашёл авторов.")
             await message.answer(_author_results_text(session),reply_markup=_author_results_keyboard(session))
         return
+    await _edit_progress(progress, "Проверил варианты, но ничего подходящего не нашёл.")
     await _send_no_results(message, query)
 
 
@@ -1196,6 +1203,12 @@ def _interleave_book_groups(groups):
             item=group[index]; key=(item.book_id,item.title,item.author)
             if key not in seen: seen.add(key); result.append(item)
     return result
+
+async def _edit_progress(message: Message, text: str) -> None:
+    try:
+        await telegram_retry(lambda: message.edit_text(text), attempts=2)
+    except Exception:
+        logger.debug("Could not edit AI progress message", exc_info=True)
 
 async def _send_favorites_page(message: Message, user_id: int, page: int, edit: bool=False):
     items=await favorites_repo.list(user_id,limit=8,offset=page*8); count=await favorites_repo.count(user_id)
