@@ -38,6 +38,10 @@ CREATE INDEX IF NOT EXISTS idx_access_users_status ON access_users(status);
 CREATE TABLE IF NOT EXISTS invite_codes (code TEXT PRIMARY KEY, created_by INTEGER NOT NULL, max_uses INTEGER NOT NULL, uses INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, expires_at TEXT, revoked_at TEXT);
 CREATE TABLE IF NOT EXISTS invite_uses (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT NOT NULL, user_id INTEGER NOT NULL, used_at TEXT NOT NULL);
 '''),
+
+(6,'006_add_kindle_sender_confirmation','''
+ALTER TABLE user_kindle_settings ADD COLUMN approved_sender_confirmed INTEGER DEFAULT 0;
+'''),
 ]
 async def run_migrations(conn):
  await conn.execute('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)')

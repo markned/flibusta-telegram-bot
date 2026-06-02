@@ -136,12 +136,13 @@ kindle_settings_repo = KindleSettingsRepository(db)
 kindle_deliveries_repo = KindleDeliveriesRepository(db)
 user_preferences_repo = UserPreferencesRepository(db)
 email_sender = EmailSender(
-    host=settings.smtp_host,
-    port=settings.smtp_port,
+    host=settings.smtp_effective_host,
+    port=settings.smtp_effective_port,
     username=settings.smtp_username,
     password=settings.smtp_password,
     from_email=settings.smtp_from_email,
-    starttls=settings.smtp_starttls,
+    starttls=settings.smtp_effective_starttls,
+    provider=settings.smtp_provider_normalized,
 )
 kindle_service = KindleService(
     flibusta=flibusta,
@@ -1468,12 +1469,12 @@ def log_startup_config() -> None:
     )
     logger.info(
         "startup smtp_provider=%s smtp_host=%s smtp_port=%s smtp_from=%s",
-        settings.smtp_provider,
-        settings.smtp_host or "disabled",
-        settings.smtp_port,
+        settings.smtp_provider_normalized,
+        settings.smtp_effective_host or "disabled",
+        settings.smtp_effective_port,
         _mask_sender(settings.smtp_from_email),
     )
-    logger.info("startup database_path=%s search_limit=%s kindle_enabled=%s kindle_queue=%s/%s attachment_mb=%s",settings.database_path,settings.search_results_limit,'yes' if _smtp_config_present() else 'no',settings.kindle_worker_concurrency,settings.kindle_user_concurrency,settings.kindle_max_attachment_mb)
+    logger.info("startup database_path=%s search_limit=%s kindle_enabled=%s kindle_queue=%s/%s attachment_mb=%s",settings.database_path,settings.search_results_limit,'yes' if settings.smtp_config_present else 'no',settings.kindle_worker_concurrency,settings.kindle_user_concurrency,settings.kindle_max_attachment_mb)
 
 
 def safe_proxy_info(proxy: str | None) -> str:
@@ -1682,9 +1683,14 @@ async def main() -> None:
             preferences_repo=user_preferences_repo,
             kindle_queue=kindle_queue,
             smtp_from_email=settings.smtp_from_email,
-            smtp_host=settings.smtp_host,
-            smtp_port=settings.smtp_port,
-            smtp_config_present=_smtp_config_present(),
+            smtp_host=settings.smtp_effective_host,
+            smtp_port=settings.smtp_effective_port,
+            smtp_starttls=settings.smtp_effective_starttls,
+            smtp_provider=settings.smtp_provider_normalized,
+            smtp_username=settings.smtp_username,
+            smtp_sender_domain=settings.smtp_sender_domain,
+            smtp_config_present=settings.smtp_config_present,
+            email_sender=email_sender,
             default_format=settings.kindle_default_format,
             max_attachment_mb=settings.kindle_max_attachment_mb,
             admin_user_ids=settings.admin_ids,

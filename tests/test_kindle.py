@@ -9,7 +9,7 @@ from app.repositories.db import Database
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository
 from app.repositories.kindle_settings import KindleSettingsRepository
 from app.services.conversion import ConversionService
-from app.services.email_sender import EmailConfigurationError, EmailSender, validate_smtp_from_email
+from app.services.email_sender import EmailConfigurationError, EmailSender, mask_smtp_identity, validate_smtp_from_email
 from app.services.kindle import (
     KindleFileTooLargeError,
     KindleRateLimitError,
@@ -187,6 +187,7 @@ def test_email_sender_builds_message_with_attachment(monkeypatch) -> None:
         )
     )
     assert captured["message"]["To"] == "reader@kindle.com"
+    assert "private library bot" in captured["message"].get_body(preferencelist=("plain",)).get_content()
     assert captured["message"].iter_attachments().__next__().get_filename() == "book.epub"
     assert captured["kwargs"]["start_tls"] is True
 
@@ -219,7 +220,7 @@ def test_queue_enqueue_behavior(tmp_path: Path) -> None:
 
 def test_user_facing_error_mapping() -> None:
     assert "слишком большой" in user_message_for_exception(KindleFileTooLargeError()).lower()
-    assert "temporarily unavailable" in user_message_for_exception(EmailConfigurationError()).lower()
+    assert "не настроена" in user_message_for_exception(EmailConfigurationError()).lower()
 
 
 def test_history_formatting(tmp_path: Path) -> None:
@@ -241,3 +242,39 @@ def test_legacy_prefs_import_and_rename(tmp_path: Path) -> None:
     from app.repositories.user_preferences import UserPreferencesRepository
     db=Database(str(tmp_path/'m.db')); run(db.initialize()); p=tmp_path/'user_prefs.json'; p.write_text('{"7":{"preferred_format":"fb2"}}')
     repo=UserPreferencesRepository(db); assert run(repo.import_json_once(p))==1; assert not p.exists(); assert (tmp_path/'user_prefs.json.migrated').exists(); assert run(repo.get(7)).preferred_download_format=='fb2'
+
+
+def test_mask_smtp_identity() -> None:
+    assert mask_smtp_identity("sender@example.com") == "s***@example.com"
+    assert mask_smtp_identity("smtp-user") == "sm***"
+    assert mask_smtp_identity(None) == "not configured"
+
+
+def test_kindle_sender_confirmation_flag(tmp_path: Path) -> None:
+    db = Database(str(tmp_path / "m.db"))
+    run(db.initialize())
+    repo = KindleSettingsRepository(db)
+    settings = run(repo.upsert(1, "reader@kindle.com"))
+    assert settings.approved_sender_confirmed is False
+    confirmed = run(repo.set_approved_sender_confirmed(1, True))
+    assert confirmed is not None
+    assert confirmed.approved_sender_confirmed is True
+
+
+def test_kindle_messages_are_button_first_without_ses_copy() -> None:
+    from app.messages.kindle import kindle_home_text, kindle_setup_text
+
+    setup = kindle_setup_text("books@example.com", "gmail")
+    assert "Сохранить Kindle e-mail" in setup
+    assert "Amazon SES" not in setup
+    home = kindle_home_text(None, "books@example.com", "gmail")
+    assert "Статус" in home
+    assert "Amazon SES" not in home
+
+
+def test_env_templates_do_not_contain_real_password() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for name in (".env.gmail.example", ".env.production.example"):
+        text = (root / name).read_text()
+        assert "your-google-app-password" in text
+        assert "your.dedicated.gmail@gmail.com" in text

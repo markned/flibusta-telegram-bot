@@ -1,7 +1,12 @@
 .env
+.env.*
+!.env.example
+!.env.gmail.example
+!.env.production.example
 .venv/
 __pycache__/
 *.pyc
 user_prefs.json
 bot.db
 .pytest_cache/
+.DS_Store

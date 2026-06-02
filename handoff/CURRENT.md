@@ -73,3 +73,16 @@ Risks:
 - no live Tavily health probe; admin status stays non-networked
 - no durable rate-limit table yet; current in-memory daily counter is deliberately lightweight
 - router heuristics still need watching for uncommon ambiguous two-word titles
+
+## Completed in Gmail SMTP / Kindle UX pass
+- switched SMTP defaults from SES-first to generic `custom`, with provider presets for `gmail`, `google_workspace`, `zoho`, `brevo`, `mailgun`, `amazon_ses`, and `disabled`
+- added effective SMTP config helpers and safe startup/admin diagnostics without SMTP secrets
+- added Gmail-oriented `.env.gmail.example`, full `.env.production.example`, and `docs/prod-env-gmail.md`
+- redesigned Kindle menu to be button-first: save e-mail, show sender, format selector, sender-confirmed flag, test e-mail, history, remove
+- added SQLite migration `006_add_kindle_sender_confirmation` and repository support for `approved_sender_confirmed`
+- changed Kindle e-mail body to private-library wording and generic SMTP/Gmail error copy
+- updated README away from SES-first deployment guidance
+- tests: `make check` ✅ 88 passed
+
+## Deployment note
+Use `SMTP_PROVIDER=gmail`, host `smtp.gmail.com`, port `587`, STARTTLS true, and paste the Google app password only into the server `.env`. Do not commit or document the real password.

@@ -22,17 +22,19 @@ class Settings(BaseSettings):
     max_download_mb: int = Field(default=45, alias="MAX_DOWNLOAD_MB")
     telegram_max_upload_mb: int = Field(default=50, alias="TELEGRAM_MAX_UPLOAD_MB")
     search_results_limit: int = Field(default=40, alias="SEARCH_RESULTS_LIMIT")
-    smtp_provider: str = Field(default="amazon_ses", alias="SMTP_PROVIDER")
+    smtp_provider: str = Field(default="custom", alias="SMTP_PROVIDER")
     smtp_host: str | None = Field(default=None, alias="SMTP_HOST")
     smtp_port: int = Field(default=587, alias="SMTP_PORT")
     smtp_username: str | None = Field(default=None, alias="SMTP_USERNAME")
     smtp_password: str | None = Field(default=None, alias="SMTP_PASSWORD")
     smtp_from_email: str | None = Field(default=None, alias="SMTP_FROM_EMAIL")
     smtp_starttls: bool = Field(default=True, alias="SMTP_STARTTLS")
+    smtp_custom_domain: str | None = Field(default=None, alias="SMTP_CUSTOM_DOMAIN")
+    smtp_dns_checks_enabled: bool = Field(default=False, alias="SMTP_DNS_CHECKS_ENABLED")
     kindle_max_attachment_mb: int = Field(default=28, alias="KINDLE_MAX_ATTACHMENT_MB")
     kindle_default_format: str = Field(default="epub", alias="KINDLE_DEFAULT_FORMAT")
     kindle_send_rate_limit_per_hour: int = Field(default=5, alias="KINDLE_SEND_RATE_LIMIT_PER_HOUR")
-    kindle_worker_concurrency: int = Field(default=2, alias="KINDLE_WORKER_CONCURRENCY")
+    kindle_worker_concurrency: int = Field(default=1, alias="KINDLE_WORKER_CONCURRENCY")
     kindle_user_concurrency: int = Field(default=1, alias="KINDLE_USER_CONCURRENCY")
     kindle_enable_conversion: bool = Field(default=False, alias="KINDLE_ENABLE_CONVERSION")
     kindle_conversion_target_format: str = Field(default="epub", alias="KINDLE_CONVERSION_TARGET_FORMAT")
@@ -92,6 +94,50 @@ class Settings(BaseSettings):
     @property
     def normalized_telegram_proxy(self) -> str | None:
         return self.telegram_proxy or None
+
+
+    @property
+    def smtp_provider_normalized(self) -> str:
+        provider = (self.smtp_provider or "custom").strip().lower()
+        allowed = {"custom", "gmail", "google_workspace", "zoho", "brevo", "mailgun", "amazon_ses", "disabled"}
+        return provider if provider in allowed else "custom"
+
+    @property
+    def smtp_effective_host(self) -> str | None:
+        if self.smtp_host:
+            return self.smtp_host
+        return {
+            "gmail": "smtp.gmail.com",
+            "google_workspace": "smtp.gmail.com",
+            "zoho": "smtp.zoho.com",
+            "brevo": "smtp-relay.brevo.com",
+        }.get(self.smtp_provider_normalized)
+
+    @property
+    def smtp_effective_port(self) -> int:
+        return self.smtp_port or 587
+
+    @property
+    def smtp_effective_starttls(self) -> bool:
+        if self.smtp_provider_normalized in {"gmail", "google_workspace", "zoho", "brevo", "mailgun"}:
+            return True
+        return self.smtp_starttls
+
+    @property
+    def smtp_config_present(self) -> bool:
+        return bool(
+            self.smtp_provider_normalized != "disabled"
+            and self.smtp_effective_host
+            and self.smtp_username
+            and self.smtp_password
+            and self.smtp_from_email
+        )
+
+    @property
+    def smtp_sender_domain(self) -> str | None:
+        if not self.smtp_from_email or "@" not in self.smtp_from_email:
+            return None
+        return self.smtp_from_email.rsplit("@", 1)[1].lower()
 
     @property
     def admin_ids(self) -> set[int]:

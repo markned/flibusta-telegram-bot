@@ -12,6 +12,7 @@ class KindleSettings:
     kindle_email: str
     preferred_kindle_format: str
     send_to_kindle_enabled: bool
+    approved_sender_confirmed: bool = False
 
 
 class KindleSettingsRepository:
@@ -23,7 +24,8 @@ class KindleSettingsRepository:
             row = await (
                 await conn.execute(
                     """
-                    SELECT user_id, kindle_email, preferred_kindle_format, send_to_kindle_enabled
+                    SELECT user_id, kindle_email, preferred_kindle_format, send_to_kindle_enabled,
+                           COALESCE(approved_sender_confirmed, 0) AS approved_sender_confirmed
                     FROM user_kindle_settings
                     WHERE user_id = ?
                     """,
@@ -37,6 +39,7 @@ class KindleSettingsRepository:
             kindle_email=row["kindle_email"],
             preferred_kindle_format=row["preferred_kindle_format"],
             send_to_kindle_enabled=bool(row["send_to_kindle_enabled"]),
+            approved_sender_confirmed=bool(row["approved_sender_confirmed"]),
         )
 
     async def upsert(self, user_id: int, kindle_email: str, preferred_format: str = "epub") -> KindleSettings:
@@ -56,7 +59,7 @@ class KindleSettingsRepository:
                 (user_id, kindle_email, preferred_format, now, now),
             )
             await conn.commit()
-        return KindleSettings(user_id, kindle_email, preferred_format, True)
+        return await self.get(user_id) or KindleSettings(user_id, kindle_email, preferred_format, True)
 
     async def delete(self, user_id: int) -> None:
         async with self.db.connect() as conn:
@@ -72,6 +75,19 @@ class KindleSettingsRepository:
                 WHERE user_id = ?
                 """,
                 (preferred_format, _now(), user_id),
+            )
+            await conn.commit()
+        return await self.get(user_id)
+
+    async def set_approved_sender_confirmed(self, user_id: int, confirmed: bool = True) -> KindleSettings | None:
+        async with self.db.connect() as conn:
+            await conn.execute(
+                """
+                UPDATE user_kindle_settings
+                SET approved_sender_confirmed = ?, updated_at = ?
+                WHERE user_id = ?
+                """,
+                (1 if confirmed else 0, _now(), user_id),
             )
             await conn.commit()
         return await self.get(user_id)

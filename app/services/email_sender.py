@@ -20,7 +20,9 @@ class EmailSender:
         password: str | None,
         from_email: str | None,
         starttls: bool,
+        provider: str = "custom",
     ):
+        self.provider = provider
         self.host = host
         self.port = port
         self.username = username
@@ -29,16 +31,13 @@ class EmailSender:
         self.starttls = starttls
 
     def validate_config(self) -> None:
-        missing = [
-            name
-            for name, value in {
-                "SMTP_HOST": self.host,
-                "SMTP_USERNAME": self.username,
-                "SMTP_PASSWORD": self.password,
-                "SMTP_FROM_EMAIL": self.from_email,
-            }.items()
-            if not value
-        ]
+        required = {
+            "SMTP_HOST": self.host,
+            "SMTP_USERNAME": self.username,
+            "SMTP_PASSWORD": self.password,
+            "SMTP_FROM_EMAIL": self.from_email,
+        }
+        missing = [name for name, value in required.items() if not value]
         if missing:
             raise EmailConfigurationError(f"Missing SMTP configuration: {', '.join(missing)}")
         validate_smtp_from_email(self.from_email or "")
@@ -57,7 +56,7 @@ class EmailSender:
         message["From"] = self.from_email
         message["To"] = to_email
         message["Subject"] = subject
-        message.set_content("Book attached. Sent by Flibusta Telegram Bot.")
+        message.set_content("Sent to Kindle by your private library bot.")
         maintype, _, subtype = content_type.partition("/")
         message.add_attachment(
             content,
@@ -98,3 +97,12 @@ def validate_smtp_from_email(value: str) -> str:
         return validate_email(value, check_deliverability=False).normalized
     except EmailNotValidError as exc:
         raise EmailConfigurationError("SMTP_FROM_EMAIL is not a valid e-mail address.") from exc
+
+
+def mask_smtp_identity(value: str | None) -> str:
+    if not value:
+        return "not configured"
+    if "@" in value:
+        local, domain = value.split("@", 1)
+        return f"{local[:1]}***@{domain}"
+    return value[:2] + "***"
