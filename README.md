@@ -111,6 +111,21 @@ Kindle sending uses a lightweight in-process async queue. It keeps Telegram resp
 - File too large: try a smaller format; the default e-mail-safe limit is 28 MB.
 - Hosting on Oracle is fine: delivery leaves through the configured SMTP provider.
 
+
+## Book covers and Kindle EPUB metadata
+
+Book cards can show a cover photo when a reliable cover is found. The lookup is best-effort and cached in SQLite by URL metadata only; image bytes are not cached or prefetched. If lookup, download, or Telegram photo sending fails, the bot falls back to the normal text card. Wrong covers are worse than no covers, so low-confidence candidates are rejected.
+
+For Kindle, EPUB files can be lightly polished before sending: the bot tries to hard-set title/author metadata and embed the best reliable cover using Calibre `ebook-meta` only. This is optional: if Calibre is missing or `ebook-meta` fails, the original EPUB is sent. The bot does not use `ebook-convert` and does not convert FB2 to EPUB in this phase.
+
+Optional server dependency:
+
+```bash
+sudo apt update && sudo apt install -y calibre
+```
+
+Relevant env vars: `BOOK_COVER_UI_ENABLED`, `COVER_LOOKUP_ENABLED`, `COVER_PROVIDER_ORDER`, `COVER_MAX_DOWNLOAD_MB`, `COVER_MIN_CONFIDENCE`, `GOOGLE_BOOKS_API_KEY`, `KINDLE_METADATA_POLISH_ENABLED`, `KINDLE_METADATA_TOOL`, `KINDLE_EMBED_COVER_ENABLED`, `KINDLE_FILENAME_TEMPLATE`. Keep `KINDLE_WORKER_CONCURRENCY=1` for small VPS/Gmail deployments.
+
 ## Product features
 
 - `/favorites` or `/fav` — saved books; only metadata is stored, never the downloaded book files.

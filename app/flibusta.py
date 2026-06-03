@@ -59,6 +59,7 @@ class BookDetails:
     annotation: str | None
     formats: list[DownloadFormat]
     page_url: str
+    cover_url: str | None = None
     series: list[SeriesRef] = field(default_factory=list)
 
 
@@ -396,6 +397,7 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
     file_size, pages = _extract_book_stats(soup)
 
     annotation = _extract_annotation(soup)
+    cover_url = _extract_cover_url(soup, base_url)
     formats = _extract_formats(soup, base_url, book_id)
 
     return BookDetails(
@@ -411,6 +413,7 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
         annotation=annotation,
         formats=formats,
         page_url=page_url,
+        cover_url=cover_url,
     )
 
 
@@ -596,6 +599,82 @@ def _extract_author_books(
 
     return results
 
+
+
+def _extract_cover_url(soup: BeautifulSoup, base_url: str) -> str | None:
+    main = soup.select_one("#main") or soup.body or soup
+    candidates: list[tuple[float, str]] = []
+    positive_markers = ("cover", "book", "image", "oblozhka", "obloj", "обложка", "обложк")
+
+    for index, img in enumerate(main.select("img[src]")):
+        src = (img.get("src") or "").strip()
+        if not src:
+            continue
+        score = _cover_image_score(img, src, index, positive_markers)
+        if score <= 0:
+            continue
+        candidates.append((score, urljoin(base_url + "/", src)))
+
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1] if candidates[0][0] >= 0.7 else None
+
+
+def _cover_image_score(img, src: str, index: int, positive_markers: tuple[str, ...]) -> float:
+    src_low = src.lower()
+    text_low = " ".join(
+        str(value or "").lower()
+        for value in (
+            src,
+            img.get("alt"),
+            img.get("title"),
+            img.get("class"),
+            img.parent.get("class") if getattr(img, "parent", None) else "",
+            img.parent.get("href") if getattr(img, "parent", None) else "",
+        )
+    )
+    if _is_ignored_cover_image(src_low, text_low):
+        return 0.0
+
+    width = _int_attr(img.get("width"))
+    height = _int_attr(img.get("height"))
+    if (width is not None and width < 90) or (height is not None and height < 120):
+        return 0.0
+
+    score = 0.0
+    if re.search(r"\.(?:jpe?g|png|webp)(?:[?#].*)?$", src_low):
+        score += 0.25
+    if any(marker in text_low for marker in positive_markers):
+        score += 0.45
+    if re.search(r"/(?:i|img|images|covers?|book)/", src_low):
+        score += 0.25
+    if width and height:
+        ratio = width / max(height, 1)
+        if width >= 180 and height >= 240 and 0.45 <= ratio <= 0.9:
+            score += 0.25
+    if index <= 3:
+        score += 0.1
+    return score
+
+
+def _is_ignored_cover_image(src_low: str, text_low: str) -> bool:
+    ignored = (
+        "icon", "logo", "counter", "button", "tracker", "pixel", "spacer", "blank",
+        "captcha", "rating", "avatar", "smil", "favicon", "banner", "ads", "advert",
+    )
+    if any(marker in text_low for marker in ignored):
+        return True
+    if re.search(r"\.(?:gif|svg)(?:[?#].*)?$", src_low):
+        return True
+    return False
+
+
+def _int_attr(value) -> int | None:
+    if value is None:
+        return None
+    match = re.search(r"\d+", str(value))
+    return int(match.group(0)) if match else None
 
 def _extract_formats(soup: BeautifulSoup, base_url: str, book_id: str) -> list[DownloadFormat]:
     known = {

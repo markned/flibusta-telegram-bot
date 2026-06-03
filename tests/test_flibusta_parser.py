@@ -247,3 +247,43 @@ def test_page_items() -> None:
     assert page_items(values, 0) == list(range(8))
     assert page_items(values, 1) == list(range(8, 16))
     assert page_items(values, 2) == list(range(16, 20))
+
+
+def test_parse_book_details_extracts_absolute_cover_url() -> None:
+    markup = """
+    <div id="main">
+      <h2>Книга</h2>
+      <img src="https://img.example/cover.jpg" alt="book cover" width="320" height="480">
+      <a href="/b/1/epub">epub</a>
+    </div>
+    """
+    details = parse_book_details(markup, "https://flibusta.is", "1", "https://flibusta.is/b/1")
+    assert details.cover_url == "https://img.example/cover.jpg"
+
+
+def test_parse_book_details_cover_relative_url_absolute() -> None:
+    markup = """
+    <div id="main">
+      <h2>Книга</h2>
+      <img src="/i/book/1/oblozhka.png" alt="Обложка" width="300" height="420">
+    </div>
+    """
+    details = parse_book_details(markup, "https://flibusta.is", "1", "https://flibusta.is/b/1")
+    assert details.cover_url == "https://flibusta.is/i/book/1/oblozhka.png"
+
+
+def test_parse_book_details_no_cover_returns_none() -> None:
+    details = parse_book_details("<h2>Книга</h2><p>Аннотация</p>", "https://flibusta.is", "1", "https://flibusta.is/b/1")
+    assert details.cover_url is None
+
+
+def test_parse_book_details_ignores_icons() -> None:
+    markup = """
+    <div id="main">
+      <h2>Книга</h2>
+      <img src="/icons/logo.png" alt="logo" width="32" height="32">
+      <img src="/counter.gif" alt="counter">
+    </div>
+    """
+    details = parse_book_details(markup, "https://flibusta.is", "1", "https://flibusta.is/b/1")
+    assert details.cover_url is None

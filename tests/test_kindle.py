@@ -278,3 +278,116 @@ def test_env_templates_do_not_contain_real_password() -> None:
         text = (root / name).read_text()
         assert "your-google-app-password" in text
         assert "your.dedicated.gmail@gmail.com" in text
+
+
+class CapturingEmailSender:
+    def __init__(self):
+        self.kwargs = None
+
+    async def send_attachment(self, **kwargs):
+        self.kwargs = kwargs
+
+
+class FormatFlibusta(FakeFlibusta):
+    def __init__(self, fmt="epub", content=b"book"):
+        super().__init__(content)
+        self.fmt = fmt
+
+    async def details(self, book_id: str) -> BookDetails:
+        return BookDetails(
+            book_id=book_id,
+            title="Clean Title",
+            authors=["Clean Author"],
+            author_refs=[],
+            translators=[],
+            illustrators=[],
+            genres=[],
+            file_size=None,
+            pages=None,
+            annotation=None,
+            formats=[DownloadFormat(self.fmt, self.fmt.upper(), f"{self.fmt}-url")],
+            page_url="page",
+            cover_url="https://example.com/cover.jpg",
+        )
+
+    async def download(self, url: str, max_bytes: int):
+        return self.content, f"raw.{self.fmt}", "application/epub+zip" if self.fmt == "epub" else "application/octet-stream"
+
+
+class FakePolisher:
+    def __init__(self, *, fail=False):
+        self.calls = []
+        self.fail = fail
+
+    async def polish(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.fail:
+            raise RuntimeError("polish failed")
+        from app.services.ebook_metadata import PolishedEbook
+        return PolishedEbook(b"polished", kwargs["filename"], kwargs["source_format"], True, kwargs["cover_image"] is not None, "fake")
+
+
+class FakeCoverResolver:
+    async def resolve(self, **kwargs):
+        from app.services.covers.types import BookCover
+        return BookCover("https://example.com/cover.jpg", "fake", 400, 600, 0.9)
+
+
+def test_kindle_epub_calls_polisher_and_sends_polished_content(tmp_path: Path, monkeypatch) -> None:
+    async def fake_download_cover(*args, **kwargs):
+        from app.services.covers.types import CoverImage
+        return CoverImage(b"cover", "image/jpeg", 400, 600, "cover.jpg", "https://example.com/cover.jpg")
+
+    monkeypatch.setattr("app.services.kindle.download_cover", fake_download_cover)
+    db = Database(str(tmp_path / "bot.db")); run(db.initialize())
+    settings_repo = KindleSettingsRepository(db); deliveries_repo = KindleDeliveriesRepository(db)
+    run(settings_repo.upsert(1, "reader@kindle.com"))
+    sender = CapturingEmailSender(); polisher = FakePolisher()
+    service = KindleService(
+        flibusta=FormatFlibusta("epub"), settings_repo=settings_repo, deliveries_repo=deliveries_repo,
+        email_sender=sender, conversion_service=ConversionService(), max_attachment_bytes=1024,
+        default_format="epub", send_rate_limit_per_hour=5, enable_conversion=False, conversion_target_format="epub",
+        cover_resolver=FakeCoverResolver(), metadata_polisher=polisher, metadata_polish_enabled=True, embed_cover_enabled=True,
+        filename_template="{author} - {title}",
+    )
+    result = run(service.send_book_to_kindle(1, "42"))
+    assert polisher.calls
+    assert polisher.calls[0]["title"] == "Clean Title"
+    assert polisher.calls[0]["authors"] == ["Clean Author"]
+    assert polisher.calls[0]["cover_image"] is not None
+    assert sender.kwargs["content"] == b"polished"
+    assert sender.kwargs["filename"] == "Clean Author - Clean Title.epub"
+    assert result.filename == "Clean Author - Clean Title.epub"
+
+
+def test_kindle_non_epub_bypasses_polisher(tmp_path: Path) -> None:
+    db = Database(str(tmp_path / "bot.db")); run(db.initialize())
+    settings_repo = KindleSettingsRepository(db); deliveries_repo = KindleDeliveriesRepository(db)
+    run(settings_repo.upsert(1, "reader@kindle.com", preferred_format="txt"))
+    sender = CapturingEmailSender(); polisher = FakePolisher()
+    service = KindleService(
+        flibusta=FormatFlibusta("txt"), settings_repo=settings_repo, deliveries_repo=deliveries_repo,
+        email_sender=sender, conversion_service=ConversionService(), max_attachment_bytes=1024,
+        default_format="epub", send_rate_limit_per_hour=5, enable_conversion=False, conversion_target_format="epub",
+        metadata_polisher=polisher, metadata_polish_enabled=True,
+    )
+    run(service.send_book_to_kindle(1, "42"))
+    assert polisher.calls == []
+    assert sender.kwargs["content"] == b"book"
+    assert sender.kwargs["filename"] == "Clean Author - Clean Title.txt"
+
+
+def test_kindle_polisher_failure_sends_raw_content(tmp_path: Path) -> None:
+    db = Database(str(tmp_path / "bot.db")); run(db.initialize())
+    settings_repo = KindleSettingsRepository(db); deliveries_repo = KindleDeliveriesRepository(db)
+    run(settings_repo.upsert(1, "reader@kindle.com"))
+    sender = CapturingEmailSender(); polisher = FakePolisher(fail=True)
+    service = KindleService(
+        flibusta=FormatFlibusta("epub"), settings_repo=settings_repo, deliveries_repo=deliveries_repo,
+        email_sender=sender, conversion_service=ConversionService(), max_attachment_bytes=1024,
+        default_format="epub", send_rate_limit_per_hour=5, enable_conversion=False, conversion_target_format="epub",
+        metadata_polisher=polisher, metadata_polish_enabled=True,
+    )
+    run(service.send_book_to_kindle(1, "42"))
+    assert sender.kwargs["content"] == b"book"
+    assert sender.kwargs["filename"] == "Clean Author - Clean Title.epub"

@@ -74,3 +74,14 @@ def test_smtp_new_env_vars_load(monkeypatch):
     assert settings.smtp_effective_host == "smtp.gmail.com"
     assert settings.smtp_custom_domain == "example.com"
     assert settings.smtp_dns_checks_enabled is True
+
+
+def test_cover_and_metadata_settings_defaults(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    settings = Settings(_env_file=None)
+    assert settings.book_cover_ui_enabled is True
+    assert settings.cover_provider_order_list == ["flibusta", "openlibrary", "google_books"]
+    assert settings.cover_max_download_mb == 3
+    assert settings.kindle_metadata_polish_enabled is True
+    assert settings.kindle_metadata_tool == "ebook-meta"
+    assert settings.kindle_filename_template == "{author} - {title}"

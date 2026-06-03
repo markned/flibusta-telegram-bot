@@ -59,14 +59,20 @@ def recommendation_details_text(query:str,items:list[tuple])->str:
 def book_text(details:BookDetails,annotation_max_chars:int,full_annotation:bool=False)->str:
  parts=[f'<b>{escape(details.title)}</b>']
  if details.authors: parts.append(escape(', '.join(details.authors[:5])))
+ if details.series:
+  series_bits=[]
+  for item in details.series[:2]:
+   label=item.name + (f' #{item.position}' if item.position else '')
+   series_bits.append(label)
+  if series_bits: parts.append('Серия: '+escape(', '.join(series_bits)))
  if details.translators: parts.append(f"Перевод: {escape(', '.join(details.translators[:5]))}")
  meta=[]
- if details.genres: meta.append(', '.join(details.genres[:3]))
+ if details.genres: meta.append(', '.join(details.genres[:5]))
  if details.file_size: meta.append(details.file_size)
  if details.pages: meta.append(f'{details.pages} с.')
  if meta: parts.append(escape(' · '.join(meta)))
  if details.annotation:
-  text=details.annotation
+  text=' '.join(details.annotation.split())
   if not full_annotation and len(text)>annotation_max_chars: text=text[:annotation_max_chars-1].rstrip()+'…'
   parts.append(escape(text))
  if not details.formats: parts.append('Доступные форматы не найдены.')
@@ -83,7 +89,7 @@ def formats_keyboard(details:BookDetails,preferred_format:str|None,is_favorite:b
   if len(row)==3: kb.row(*row); row=[]
  if row: kb.row(*row)
  kindle=next((c for c in [preferred_format,'epub','fb2','txt','mobi','pdf'] if c and any(f.code==c for f in details.formats)),None)
- if kindle: kb.row(InlineKeyboardButton(text=f'📤 Отправить {kindle.upper()} на Kindle',callback_data=f'kindle:{details.book_id}'))
+ if kindle: kb.row(InlineKeyboardButton(text=f'📤 Kindle {kindle.upper()}' if kindle else '📤 На Kindle',callback_data=f'kindle:{details.book_id}'))
  if details.annotation and len(details.annotation)>annotation_max_chars: kb.row(InlineKeyboardButton(text='Показать всю аннотацию',callback_data=f'annotation:{details.book_id}'))
  kb.row(InlineKeyboardButton(text='✅ В избранном' if is_favorite else '⭐ В избранное',callback_data=f"{'fav_remove' if is_favorite else 'fav_add'}:{details.book_id}")); return kb.as_markup()
 def main_reply_keyboard():

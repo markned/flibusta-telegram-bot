@@ -86,3 +86,18 @@ Risks:
 
 ## Deployment note
 Use `SMTP_PROVIDER=gmail`, host `smtp.gmail.com`, port `587`, STARTTLS true, and paste the Google app password only into the server `.env`. Do not commit or document the real password.
+
+## Completed in cover UI / Kindle metadata pass
+- added `BookDetails.cover_url` and best-effort Flibusta cover extraction heuristics
+- added lightweight cover resolver modules with provider order, SQLite metadata cache, negative cache, and safe cover downloader
+- book cards now send photo+caption when a reliable cover is available, falling back to text on any failure
+- added EPUB-only Kindle metadata polishing through optional Calibre `ebook-meta`; no `ebook-convert`, no FB2→EPUB conversion
+- Kindle EPUB sends best-effort clean filename/title/authors and optional embedded cover; raw file is sent if polishing fails or Calibre is missing
+- added admin Kindle diagnostics for cover lookup and metadata tool availability
+- updated env templates and README with cover/metadata settings and optional `sudo apt install -y calibre`
+- tests: `make check` ✅ 110 passed
+
+## Cover/metadata operational notes
+- no image bytes are cached in SQLite or memory; only cover metadata/negative results are cached
+- `COVER_PROVIDER_ORDER=flibusta` is the fastest conservative setting if external cover lookup feels slow
+- keep `KINDLE_WORKER_CONCURRENCY=1` on the low-memory VPS

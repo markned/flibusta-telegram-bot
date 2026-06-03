@@ -60,6 +60,15 @@ def build_kindle_router(
     admin_user_ids: set[int],
     retention_days: int,
     export_include_full_emails: bool,
+    cover_lookup_enabled: bool = False,
+    cover_provider_order: str = "",
+    cover_cache_ttl_seconds: int = 0,
+    google_books_key_configured: bool = False,
+    metadata_polish_enabled: bool = False,
+    metadata_tool: str = "ebook-meta",
+    metadata_tool_available: bool = False,
+    embed_cover_enabled: bool = False,
+    kindle_worker_concurrency: int = 1,
 ) -> Router:
     router = Router()
 
@@ -221,7 +230,15 @@ def build_kindle_router(
             f"Max attachment: {max_attachment_mb} MB\n"
             f"Queue size: {kindle_queue.size}\n"
             f"Active jobs: {kindle_queue.active_jobs}\n"
-            f"Recent failures (24h): {failures}"
+            f"Recent failures (24h): {failures}\n"
+            f"Cover lookup: {'yes' if cover_lookup_enabled else 'no'}\n"
+            f"Cover providers: {escape(cover_provider_order or 'disabled')}\n"
+            f"Google Books key: {'yes' if google_books_key_configured else 'no'}\n"
+            f"Cover cache TTL: {cover_cache_ttl_seconds}s\n"
+            f"Metadata polish: {'yes' if metadata_polish_enabled else 'no'}\n"
+            f"Metadata tool: {escape(metadata_tool)} ({'available' if metadata_tool_available else 'missing'})\n"
+            f"Embed cover: {'yes' if embed_cover_enabled else 'no'}\n"
+            f"Kindle worker concurrency: {kindle_worker_concurrency}"
             + ("\nGmail SMTP requires a Google app password." if smtp_provider == "gmail" else "")
             + ("\nGoogle Workspace sender/DNS is configured outside the bot." if smtp_provider == "google_workspace" else "")
         )

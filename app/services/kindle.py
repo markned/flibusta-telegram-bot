@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,9 +14,13 @@ from app.repositories.kindle_settings import KindleSettingsRepository
 from app.repositories.download_history import DownloadHistoryRepository
 from app.repositories.last_books import LastBooksRepository
 from app.services.conversion import ConversionNotAvailableError, ConversionService
+from app.services.covers.download import download_cover
+from app.services.covers.resolver import CoverResolver
+from app.services.ebook_metadata import EbookMetadataPolisher
 from app.services.email_sender import EmailSender
 from app.services.smtp_errors import classify_smtp_error
 
+logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[str], Awaitable[None]]
 
 
@@ -122,6 +127,14 @@ class KindleService:
         conversion_target_format: str,
         download_history_repo: DownloadHistoryRepository | None = None,
         last_books_repo: LastBooksRepository | None = None,
+        cover_resolver: CoverResolver | None = None,
+        cover_download_max_bytes: int = 3 * 1024 * 1024,
+        cover_download_timeout_seconds: float = 6,
+        metadata_polisher: EbookMetadataPolisher | None = None,
+        metadata_polish_enabled: bool = True,
+        embed_cover_enabled: bool = True,
+        filename_template: str = "{author} - {title}",
+        strict_metadata_title_author: bool = True,
     ):
         self.flibusta = flibusta
         self.settings_repo = settings_repo
@@ -135,6 +148,14 @@ class KindleService:
         self.conversion_target_format = conversion_target_format
         self.download_history_repo = download_history_repo
         self.last_books_repo = last_books_repo
+        self.cover_resolver = cover_resolver
+        self.cover_download_max_bytes = cover_download_max_bytes
+        self.cover_download_timeout_seconds = cover_download_timeout_seconds
+        self.metadata_polisher = metadata_polisher
+        self.metadata_polish_enabled = metadata_polish_enabled
+        self.embed_cover_enabled = embed_cover_enabled
+        self.filename_template = filename_template
+        self.strict_metadata_title_author = strict_metadata_title_author
 
     async def create_queued_delivery(self, user_id: int, book_id: str, retry_of_delivery_id: int | None = None) -> int:
         settings = await self.settings_repo.get(user_id)
@@ -199,6 +220,37 @@ class KindleService:
             else:
                 target_code = target.code
                 await _progress(on_progress, "Preparing e-mail…")
+
+            filename = self._kindle_filename(details.title, details.authors, target_code, fallback=filename)
+            if target_code == "epub" and self.metadata_polish_enabled and self.metadata_polisher is not None:
+                cover_image = None
+                if self.embed_cover_enabled and self.cover_resolver is not None:
+                    try:
+                        cover = await self.cover_resolver.resolve(
+                            title=details.title,
+                            authors=details.authors,
+                            flibusta_cover_url=details.cover_url,
+                        )
+                        if cover is not None:
+                            cover_image = await download_cover(
+                                cover.url,
+                                max_bytes=self.cover_download_max_bytes,
+                                timeout=self.cover_download_timeout_seconds,
+                            )
+                    except Exception:
+                        logger.warning("Kindle cover lookup/download failed book_id=%s", book_id, exc_info=True)
+                try:
+                    polished = await self.metadata_polisher.polish(
+                        content=content,
+                        filename=filename,
+                        source_format=target_code,
+                        title=details.title,
+                        authors=details.authors,
+                        cover_image=cover_image,
+                    )
+                    content, filename = polished.content, polished.filename
+                except Exception:
+                    logger.warning("Kindle metadata polish failed book_id=%s", book_id, exc_info=True)
             await self.deliveries_repo.update_status(
                 delivery_id,
                 "sending",
@@ -225,6 +277,19 @@ class KindleService:
             if self.download_history_repo:
                 await self.download_history_repo.add(user_id=user_id,book_id=book_id,title=locals().get("details").title if locals().get("details") else None,author=", ".join(locals().get("details").authors) if locals().get("details") else None,format=locals().get("target_code", locals().get("target").code if locals().get("target") else self.default_format),filename=locals().get("filename"),file_size_bytes=len(locals().get("content", b"")) or None,delivery_target="kindle",status="failed",error=classify_smtp_error(exc))
             raise
+
+    def _kindle_filename(self, title: str, authors: list[str], fmt: str, *, fallback: str) -> str:
+        suffix = f".{fmt.lower()}" if fmt else Path(fallback).suffix or ".epub"
+        author = authors[0] if authors else ""
+        try:
+            stem = self.filename_template.format(author=author, title=title).strip(" -")
+        except Exception:
+            stem = f"{author} - {title}" if author else title
+        if not stem:
+            stem = Path(fallback).stem or "book"
+        if not stem.lower().endswith(suffix.lower()):
+            stem += suffix
+        return sanitize_filename(stem)
 
     async def send_book_to_kindle(self, user_id: int, book_id: str) -> KindleSendResult:
         delivery_id = await self.create_queued_delivery(user_id, book_id)

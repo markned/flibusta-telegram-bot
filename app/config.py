@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     kindle_max_job_attempts: int = Field(default=3, alias="KINDLE_MAX_JOB_ATTEMPTS")
     kindle_retry_base_delay_seconds: int = Field(default=10, alias="KINDLE_RETRY_BASE_DELAY_SECONDS")
     kindle_delivery_log_retention_days: int = Field(default=90, alias="KINDLE_DELIVERY_LOG_RETENTION_DAYS")
+
+    kindle_metadata_polish_enabled: bool = Field(default=True, alias="KINDLE_METADATA_POLISH_ENABLED")
+    kindle_metadata_require_calibre: bool = Field(default=False, alias="KINDLE_METADATA_REQUIRE_CALIBRE")
+    kindle_metadata_tool: str = Field(default="ebook-meta", alias="KINDLE_METADATA_TOOL")
+    kindle_metadata_timeout_seconds: float = Field(default=30, alias="KINDLE_METADATA_TIMEOUT_SECONDS")
+    kindle_embed_cover_enabled: bool = Field(default=True, alias="KINDLE_EMBED_COVER_ENABLED")
+    kindle_filename_template: str = Field(default="{author} - {title}", alias="KINDLE_FILENAME_TEMPLATE")
+    kindle_strict_metadata_title_author: bool = Field(default=True, alias="KINDLE_STRICT_METADATA_TITLE_AUTHOR")
     admin_export_include_full_emails: bool = Field(default=False, alias="ADMIN_EXPORT_INCLUDE_FULL_EMAILS")
     database_path: str = Field(default="bot.db", alias="DATABASE_PATH")
     admin_user_ids: str = Field(default="", alias="ADMIN_USER_IDS")
@@ -51,6 +59,21 @@ class Settings(BaseSettings):
     cache_book_details_ttl_seconds: int = Field(default=21600, alias="CACHE_BOOK_DETAILS_TTL_SECONDS")
     cache_author_books_ttl_seconds: int = Field(default=21600, alias="CACHE_AUTHOR_BOOKS_TTL_SECONDS")
     book_annotation_max_chars: int = Field(default=1200, alias="BOOK_ANNOTATION_MAX_CHARS")
+
+    book_cover_ui_enabled: bool = Field(default=True, alias="BOOK_COVER_UI_ENABLED")
+    book_cover_send_as_photo: bool = Field(default=True, alias="BOOK_COVER_SEND_AS_PHOTO")
+    book_cover_fallback_to_text: bool = Field(default=True, alias="BOOK_COVER_FALLBACK_TO_TEXT")
+    cover_card_caption_max_chars: int = Field(default=900, alias="COVER_CARD_CAPTION_MAX_CHARS")
+    cover_lookup_enabled: bool = Field(default=True, alias="COVER_LOOKUP_ENABLED")
+    cover_provider_order: str = Field(default="flibusta,openlibrary,google_books", alias="COVER_PROVIDER_ORDER")
+    cover_lookup_timeout_seconds: float = Field(default=6, alias="COVER_LOOKUP_TIMEOUT_SECONDS")
+    cover_cache_ttl_seconds: int = Field(default=604800, alias="COVER_CACHE_TTL_SECONDS")
+    cover_negative_cache_ttl_seconds: int = Field(default=86400, alias="COVER_NEGATIVE_CACHE_TTL_SECONDS")
+    cover_max_download_mb: int = Field(default=3, alias="COVER_MAX_DOWNLOAD_MB")
+    cover_min_width: int = Field(default=300, alias="COVER_MIN_WIDTH")
+    cover_min_height: int = Field(default=400, alias="COVER_MIN_HEIGHT")
+    cover_min_confidence: float = Field(default=0.72, alias="COVER_MIN_CONFIDENCE")
+    google_books_api_key: str | None = Field(default=None, alias="GOOGLE_BOOKS_API_KEY")
     search_rate_limit_per_minute: int = Field(default=20, alias="SEARCH_RATE_LIMIT_PER_MINUTE")
     download_rate_limit_per_hour: int = Field(default=30, alias="DOWNLOAD_RATE_LIMIT_PER_HOUR")
     access_control_enabled: bool = Field(default=True, alias="ACCESS_CONTROL_ENABLED")
@@ -138,6 +161,13 @@ class Settings(BaseSettings):
         if not self.smtp_from_email or "@" not in self.smtp_from_email:
             return None
         return self.smtp_from_email.rsplit("@", 1)[1].lower()
+
+
+    @property
+    def cover_provider_order_list(self) -> list[str]:
+        allowed = {"flibusta", "openlibrary", "google_books", "disabled"}
+        values = [item.strip().lower() for item in self.cover_provider_order.split(",") if item.strip()]
+        return [item for item in values if item in allowed] or ["flibusta"]
 
     @property
     def admin_ids(self) -> set[int]:

@@ -45,6 +45,10 @@ from app.repositories.last_books import LastBooksRepository
 from app.repositories.access import AccessRepository
 from app.services.email_sender import EmailSender
 from app.services.conversion import ConversionService
+from app.services.covers.download import download_cover
+from app.services.covers.providers import DisabledCoverProvider, FlibustaCoverProvider, GoogleBooksCoverProvider, OpenLibraryCoverProvider
+from app.services.covers.resolver import CoverResolver
+from app.services.ebook_metadata import EbookMetadataPolisher
 from app.services.kindle import KindleService
 from app.services.kindle_queue import KindleQueue
 from app.services.cached_flibusta import CachedFlibustaClient
@@ -121,6 +125,31 @@ raw_flibusta = FlibustaClient(
 )
 db = Database(settings.database_path)
 cache_repo = CacheRepository(db)
+cover_providers = []
+for provider_name in settings.cover_provider_order_list:
+    if provider_name == "flibusta":
+        cover_providers.append(FlibustaCoverProvider())
+    elif provider_name == "openlibrary":
+        cover_providers.append(OpenLibraryCoverProvider(timeout_seconds=settings.cover_lookup_timeout_seconds))
+    elif provider_name == "google_books":
+        cover_providers.append(GoogleBooksCoverProvider(api_key=settings.google_books_api_key, timeout_seconds=settings.cover_lookup_timeout_seconds))
+    elif provider_name == "disabled":
+        cover_providers.append(DisabledCoverProvider())
+cover_resolver = CoverResolver(
+    cache_repo=cache_repo,
+    providers=cover_providers,
+    enabled=settings.cover_lookup_enabled,
+    cache_ttl_seconds=settings.cover_cache_ttl_seconds,
+    negative_cache_ttl_seconds=settings.cover_negative_cache_ttl_seconds,
+    min_confidence=settings.cover_min_confidence,
+    min_width=settings.cover_min_width,
+    min_height=settings.cover_min_height,
+)
+ebook_metadata_polisher = EbookMetadataPolisher(
+    tool=settings.kindle_metadata_tool,
+    timeout_seconds=settings.kindle_metadata_timeout_seconds,
+    require_tool=settings.kindle_metadata_require_calibre,
+)
 favorites_repo = FavoritesRepository(db)
 download_history_repo = DownloadHistoryRepository(db)
 last_books_repo = LastBooksRepository(db)
@@ -157,6 +186,14 @@ kindle_service = KindleService(
     conversion_target_format=settings.kindle_conversion_target_format,
     download_history_repo=download_history_repo,
     last_books_repo=last_books_repo,
+    cover_resolver=cover_resolver,
+    cover_download_max_bytes=settings.cover_max_download_mb * 1024 * 1024,
+    cover_download_timeout_seconds=settings.cover_lookup_timeout_seconds,
+    metadata_polisher=ebook_metadata_polisher,
+    metadata_polish_enabled=settings.kindle_metadata_polish_enabled,
+    embed_cover_enabled=settings.kindle_embed_cover_enabled,
+    filename_template=settings.kindle_filename_template,
+    strict_metadata_title_author=settings.kindle_strict_metadata_title_author,
 )
 kindle_queue = KindleQueue(
     service=kindle_service,
@@ -577,12 +614,57 @@ async def show_book(callback: CallbackQuery) -> None:
     preferred_format = await _preferred_format(callback.from_user.id)
     await last_books_repo.upsert(callback.from_user.id, details.book_id, details.title, ", ".join(details.authors) or None, "opened")
     is_favorite = await favorites_repo.exists(callback.from_user.id, details.book_id)
-    await telegram_retry(
-        lambda: callback.message.answer(
-            render_book_text(details, settings.book_annotation_max_chars),
-            reply_markup=render_formats_keyboard(details, preferred_format=preferred_format, is_favorite=is_favorite, annotation_max_chars=settings.book_annotation_max_chars),
-        )
+    await send_book_card(callback.message, details, preferred_format=preferred_format, is_favorite=is_favorite)
+
+
+async def send_book_card(message: Message, details, *, preferred_format: str | None, is_favorite: bool) -> None:
+    text = render_book_text(details, settings.book_annotation_max_chars)
+    keyboard = render_formats_keyboard(
+        details,
+        preferred_format=preferred_format,
+        is_favorite=is_favorite,
+        annotation_max_chars=settings.book_annotation_max_chars,
     )
+    if not (settings.book_cover_ui_enabled and settings.book_cover_send_as_photo):
+        await telegram_retry(lambda: message.answer(text, reply_markup=keyboard))
+        return
+    try:
+        cover = await cover_resolver.resolve(
+            title=details.title,
+            authors=details.authors,
+            flibusta_cover_url=details.cover_url,
+        )
+        if cover is None:
+            await telegram_retry(lambda: message.answer(text, reply_markup=keyboard))
+            return
+        cover_image = await download_cover(
+            cover.url,
+            max_bytes=settings.cover_max_download_mb * 1024 * 1024,
+            timeout=settings.cover_lookup_timeout_seconds,
+        )
+        caption, truncated = _photo_caption(text, settings.cover_card_caption_max_chars)
+        await telegram_retry(
+            lambda: message.answer_photo(
+                BufferedInputFile(cover_image.content, cover_image.filename),
+                caption=caption,
+                reply_markup=keyboard,
+            )
+        )
+        if truncated:
+            await telegram_retry(lambda: message.answer(text))
+    except Exception:
+        logger.warning("book cover card failed book_id=%s", getattr(details, "book_id", "unknown"), exc_info=True)
+        if settings.book_cover_fallback_to_text:
+            await telegram_retry(lambda: message.answer(text, reply_markup=keyboard))
+        else:
+            raise
+
+
+def _photo_caption(text: str, limit: int) -> tuple[str, bool]:
+    limit = min(max(100, limit), 1024)
+    if len(text) <= limit:
+        return text, False
+    return text[: limit - 1].rstrip() + "…", True
 
 @router.callback_query(F.data.startswith("annotation:"))
 async def show_full_annotation(callback: CallbackQuery) -> None:
@@ -1696,6 +1778,15 @@ async def main() -> None:
             admin_user_ids=settings.admin_ids,
             retention_days=settings.kindle_delivery_log_retention_days,
             export_include_full_emails=settings.admin_export_include_full_emails,
+            cover_lookup_enabled=settings.cover_lookup_enabled,
+            cover_provider_order=settings.cover_provider_order,
+            cover_cache_ttl_seconds=settings.cover_cache_ttl_seconds,
+            google_books_key_configured=bool(settings.google_books_api_key),
+            metadata_polish_enabled=settings.kindle_metadata_polish_enabled,
+            metadata_tool=settings.kindle_metadata_tool,
+            metadata_tool_available=ebook_metadata_polisher.tool_available(),
+            embed_cover_enabled=settings.kindle_embed_cover_enabled,
+            kindle_worker_concurrency=settings.kindle_worker_concurrency,
         )
     )
     dispatcher.include_router(

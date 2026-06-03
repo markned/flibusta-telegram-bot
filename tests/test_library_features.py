@@ -180,8 +180,9 @@ class _FakeBot:
  async def send_chat_action(self,*a,**kw): return None
 class _FakeMessage:
  def __init__(self,text=''):
-  self.text=text; self.from_user=_FakeUser(); self.chat=_FakeChat(); self.bot=_FakeBot(); self.answers=[]; self.edits=[]
+  self.text=text; self.from_user=_FakeUser(); self.chat=_FakeChat(); self.bot=_FakeBot(); self.answers=[]; self.photos=[]; self.edits=[]
  async def answer(self,text,*a,**kw): self.answers.append((text,kw)); return self
+ async def answer_photo(self,photo,*a,**kw): self.photos.append((photo,kw)); return self
  async def edit_text(self,text,*a,**kw): self.edits.append(text); return self
 
 def test_send_search_results_sends_message(monkeypatch):
@@ -346,6 +347,9 @@ def test_book_card_callback_opens_book(monkeypatch):
  async def pref(*a): return 'epub'
  async def upsert(*a,**kw): return None
  async def exists(*a,**kw): return False
+ class Resolver:
+  async def resolve(self, **kw): return None
+ monkeypatch.setattr(main,'cover_resolver',Resolver())
  monkeypatch.setattr(main,'flibusta',Flib()); monkeypatch.setattr(main,'_preferred_format',pref); monkeypatch.setattr(main.last_books_repo,'upsert',upsert); monkeypatch.setattr(main.favorites_repo,'exists',exists)
  cb=_FakeCallback()
  run(main.show_book(cb))
@@ -398,3 +402,65 @@ def test_assistant_commands_visible_when_enabled(monkeypatch):
  assert [c.command for c in main._assistant_bot_commands()]==['recommend']
  monkeypatch.setattr(main.settings,'discovery_enabled',True)
  assert [c.command for c in main._assistant_bot_commands()]==['recommend','discover','discover_web']
+
+def _book_details_for_card(annotation='Short', cover_url=None):
+ from app.flibusta import BookDetails, DownloadFormat
+ return BookDetails(book_id='1',title='Book',authors=['Author'],author_refs=[],translators=[],illustrators=[],genres=['Жанр'],file_size='1M',pages=10,annotation=annotation,formats=[DownloadFormat('epub','EPUB','url')],page_url='x',cover_url=cover_url)
+
+
+def test_book_card_sends_photo_when_cover_available(monkeypatch):
+ import app.main as main
+ from app.services.covers.types import BookCover, CoverImage
+ class Resolver:
+  async def resolve(self, **kw): return BookCover('https://example.com/cover.jpg','fake',400,600,0.9)
+ async def dl(*a,**kw): return CoverImage(b'img','image/jpeg',400,600,'cover.jpg','https://example.com/cover.jpg')
+ monkeypatch.setattr(main,'cover_resolver',Resolver())
+ monkeypatch.setattr(main,'download_cover',dl)
+ monkeypatch.setattr(main.settings,'book_cover_ui_enabled',True)
+ monkeypatch.setattr(main.settings,'book_cover_send_as_photo',True)
+ msg=_FakeMessage()
+ run(main.send_book_card(msg,_book_details_for_card(cover_url='https://example.com/cover.jpg'),preferred_format='epub',is_favorite=False))
+ assert msg.photos
+ assert msg.photos[0][1]['reply_markup'] is not None
+
+
+def test_book_card_without_cover_sends_text(monkeypatch):
+ import app.main as main
+ class Resolver:
+  async def resolve(self, **kw): return None
+ monkeypatch.setattr(main,'cover_resolver',Resolver())
+ msg=_FakeMessage()
+ run(main.send_book_card(msg,_book_details_for_card(),preferred_format='epub',is_favorite=False))
+ assert msg.answers and not msg.photos
+
+
+def test_book_card_photo_failure_falls_back_to_text(monkeypatch):
+ import app.main as main
+ from app.services.covers.types import BookCover, CoverImage
+ class Resolver:
+  async def resolve(self, **kw): return BookCover('https://example.com/cover.jpg','fake',400,600,0.9)
+ async def dl(*a,**kw): return CoverImage(b'img','image/jpeg',400,600,'cover.jpg','https://example.com/cover.jpg')
+ class BadPhotoMessage(_FakeMessage):
+  async def answer_photo(self,*a,**kw): raise RuntimeError('telegram failed')
+ monkeypatch.setattr(main,'cover_resolver',Resolver())
+ monkeypatch.setattr(main,'download_cover',dl)
+ monkeypatch.setattr(main.settings,'book_cover_fallback_to_text',True)
+ msg=BadPhotoMessage()
+ run(main.send_book_card(msg,_book_details_for_card(cover_url='https://example.com/cover.jpg'),preferred_format='epub',is_favorite=False))
+ assert msg.answers
+
+
+def test_book_card_long_annotation_caption_is_capped(monkeypatch):
+ import app.main as main
+ from app.services.covers.types import BookCover, CoverImage
+ class Resolver:
+  async def resolve(self, **kw): return BookCover('https://example.com/cover.jpg','fake',400,600,0.9)
+ async def dl(*a,**kw): return CoverImage(b'img','image/jpeg',400,600,'cover.jpg','https://example.com/cover.jpg')
+ monkeypatch.setattr(main,'cover_resolver',Resolver())
+ monkeypatch.setattr(main,'download_cover',dl)
+ monkeypatch.setattr(main.settings,'cover_card_caption_max_chars',300)
+ msg=_FakeMessage()
+ run(main.send_book_card(msg,_book_details_for_card(annotation='x '*1000, cover_url='https://example.com/cover.jpg'),preferred_format='epub',is_favorite=False))
+ assert msg.photos
+ assert len(msg.photos[0][1]['caption']) <= 300
+ assert msg.answers  # full text follows separately
