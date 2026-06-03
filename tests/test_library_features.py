@@ -309,12 +309,14 @@ def test_admin_intent_is_admin_only_and_dry_run(monkeypatch):
 
 def test_case_insensitive_author_title_detection():
  from app.services.intent_router import IntentKind, route_intent
- for query in ['Исповедь Толстой','исповедь толстой','Толстой Исповедь','толстой исповедь','Идиот Достоевский','идиот достоевский','Преступление и наказание Достоевский','преступление и наказание достоевский','Исповедь Лев Толстой','исповедь лев толстой','Лев Толстой Исповедь','лев толстой исповедь','Идиот Федор Достоевский','идиот федор достоевский','Преступление и наказание Федор Достоевский','преступление и наказание федор достоевский']:
+ for query in ['Исповедь Толстой','исповедь толстой','Толстой Исповедь','толстой исповедь','Идиот Достоевский','идиот достоевский','Преступление и наказание Достоевский','преступление и наказание достоевский','Исповедь Лев Толстой','исповедь лев толстой','Лев Толстой Исповедь','лев толстой исповедь','Идиот Федор Достоевский','идиот федор достоевский','Преступление и наказание Федор Достоевский','преступление и наказание федор достоевский','Восток Патту','восток патту']:
   assert route_intent(query).kind==IntentKind.AUTHOR_TITLE_SEARCH
  d=route_intent('Исповедь Лев Толстой')
  assert d.author_part=='Лев Толстой' and d.title_part=='Исповедь'
  d=route_intent('Лев Толстой Исповедь')
  assert d.author_part=='Лев Толстой' and d.title_part=='Исповедь'
+ d=route_intent('Восток Патту')
+ assert d.author_part=='Патту' and d.title_part=='Восток'
 
 def test_author_title_search_full_author_name_filters_bad_literal(monkeypatch):
  import app.main as main
@@ -344,6 +346,19 @@ def test_author_title_search_falls_back_to_author_books(monkeypatch):
  msg=_FakeMessage()
  assert run(main.send_author_title_results(msg,'Лев Толстой','Исповедь')) is True
  assert msg.answers and 'Исповедь' in msg.answers[-1][0] and 'Война' not in msg.answers[-1][0]
+
+def test_natural_title_author_query_searches_title_and_filters_author(monkeypatch):
+ import app.main as main
+ class Flib:
+  async def search(self,q,limit):
+   assert q=='Восток'
+   return [SearchResult('wrong','Восток','Карел Чапек'),SearchResult('ok','Восток','Эдит Патту')]
+ monkeypatch.setattr(main,'flibusta',Flib())
+ msg=_FakeMessage('Восток Патту')
+ run(main.search_text(msg))
+ buttons=[button.text for row in msg.answers[-1][1]['reply_markup'].inline_keyboard for button in row]
+ assert any('Эдит Патту' in text for text in buttons)
+ assert not any('Карел Чапек' in text for text in buttons)
 
 def test_clarifier_examples_are_neutral():
  from app.services.intent_router import route_intent

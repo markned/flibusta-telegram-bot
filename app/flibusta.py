@@ -119,12 +119,27 @@ class FlibustaClient:
 
         book_url = f"{self.base_url}/booksearch?ask={quote_plus(query)}&chb=on"
         author_url = f"{self.base_url}/booksearch?ask={quote_plus(query)}&cha=on"
-        book_response = await self._get(book_url)
-        author_response = await self._get(author_url)
-        return (
-            parse_search_results(book_response.text, limit=book_limit),
-            parse_author_results(author_response.text, limit=author_limit),
-        )
+        errors: list[FlibustaError] = []
+        books: list[SearchResult] = []
+        authors: list[AuthorResult] = []
+
+        try:
+            book_response = await self._get(book_url)
+            books = parse_search_results(book_response.text, limit=book_limit)
+        except FlibustaError as exc:
+            errors.append(exc)
+            logger.warning("Flibusta book search failed for combined search: %s", _safe_log_url(book_url))
+
+        try:
+            author_response = await self._get(author_url)
+            authors = parse_author_results(author_response.text, limit=author_limit)
+        except FlibustaError as exc:
+            errors.append(exc)
+            logger.warning("Flibusta author search failed for combined search: %s", _safe_log_url(author_url))
+
+        if errors and not books and not authors:
+            raise errors[0]
+        return books, authors
 
     async def search_authors(self, query: str, limit: int = 20) -> list[AuthorResult]:
         query = query.strip()

@@ -2,6 +2,8 @@ from io import BytesIO
 import zipfile
 
 from app.flibusta import (
+    FlibustaClient,
+    FlibustaError,
     _unzip_fb2_if_needed,
     parse_author_page,
     parse_author_results,
@@ -38,6 +40,35 @@ def test_parse_author_results() -> None:
 
     assert [item.author_id for item in results] == ["10", "11"]
     assert results[0].name == "Анджей Сапковский"
+
+
+def test_search_all_keeps_books_when_author_search_fails() -> None:
+    class Response:
+        text = '<ul><li><a href="/b/123">Восток</a> <a href="/a/1">Эдит Патту</a></li></ul>'
+
+    class Client(FlibustaClient):
+        async def _get(self, url: str):
+            if "cha=on" in url:
+                raise FlibustaError("author search timeout")
+            return Response()
+
+    client = Client("https://flibusta.is", client=object())
+    books, authors = __import__("asyncio").run(client.search_all("Восток", book_limit=5, author_limit=5))
+    assert [(item.title, item.author) for item in books] == [("Восток", "Эдит Патту")]
+    assert authors == []
+
+
+def test_search_all_raises_when_both_halves_fail() -> None:
+    class Client(FlibustaClient):
+        async def _get(self, url: str):
+            raise FlibustaError("timeout")
+
+    client = Client("https://flibusta.is", client=object())
+    import asyncio
+    import pytest
+
+    with pytest.raises(FlibustaError):
+        asyncio.run(client.search_all("Восток", book_limit=5, author_limit=5))
 
 
 def test_parse_book_details() -> None:

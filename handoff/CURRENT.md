@@ -114,3 +114,9 @@ Use `SMTP_PROVIDER=gmail`, host `smtp.gmail.com`, port `587`, STARTTLS true, and
 - production default is `UI_HIDE_COMMAND_MENU_FOR_USERS=true` and `UI_SHOW_ADMIN_COMMANDS=false`
 - set `UI_SHOW_ADMIN_COMMANDS=true` only if admins want a small scoped menu
 - set `UI_SHOW_POWER_USER_COMMANDS=true` only for debugging; it restores a compact default command menu
+
+## Completed in search reliability hotfix
+- made Flibusta combined search tolerate partial failures: book results are kept if author lookup times out, and vice versa
+- added deterministic title+author routing for `Восток Патту` / `восток патту` while keeping `Эдит Патту` as author search
+- added regression tests for partial Flibusta failures and natural title+author search filtering
+- tests: `make check` ✅ 122 passed
