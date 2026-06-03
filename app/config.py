@@ -105,6 +105,11 @@ class Settings(BaseSettings):
     recommendation_confirmation_required: bool = Field(default=True, alias="RECOMMENDATION_CONFIRMATION_REQUIRED")
     literary_sources_enabled: bool = Field(default=False, alias="LITERARY_SOURCES_ENABLED")
     literary_source_provider: str = Field(default="disabled", alias="LITERARY_SOURCE_PROVIDER")
+    ui_hide_command_menu_for_users: bool = Field(default=True, alias="UI_HIDE_COMMAND_MENU_FOR_USERS")
+    ui_show_admin_commands: bool = Field(default=False, alias="UI_SHOW_ADMIN_COMMANDS")
+    ui_show_power_user_commands: bool = Field(default=False, alias="UI_SHOW_POWER_USER_COMMANDS")
+    ui_home_inline_buttons: bool = Field(default=True, alias="UI_HOME_INLINE_BUTTONS")
+    ui_reply_keyboard_enabled: bool = Field(default=True, alias="UI_REPLY_KEYBOARD_ENABLED")
 
     @property
     def base_url(self) -> str:

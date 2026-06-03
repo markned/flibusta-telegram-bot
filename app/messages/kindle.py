@@ -16,7 +16,7 @@ def kindle_setup_text(sender: str | None, provider: str = "custom") -> str:
         "2. Добавь отправителя бота в Approved Personal Document E-mail List:\n"
         f"{sender_text}\n\n"
         "3. Вернись сюда и нажми «📮 Сохранить Kindle e-mail».\n\n"
-        "4. После этого в карточке книги нажимай «Отправить на Kindle»."
+        "4. После этого в карточке книги нажимай кнопку Kindle."
         f"{provider_note}"
     )
 
@@ -36,7 +36,7 @@ def kindle_home_text(settings, sender: str | None, provider: str = "custom") -> 
     return (
         "<b>Kindle</b>\n\n"
         "Статус: ✅ Настроен\n\n"
-        f"Kindle address: {mask_email(settings.kindle_email)}\n"
+        f"Адрес: {mask_email(settings.kindle_email)}\n"
         f"Формат: {escape(settings.preferred_kindle_format.upper())}\n"
         f"Отправитель: {sender_text}\n"
         f"Отправитель добавлен в Amazon: {approved}"
@@ -44,7 +44,12 @@ def kindle_home_text(settings, sender: str | None, provider: str = "custom") -> 
 
 
 def kindle_missing_email_text() -> str:
-    return "Kindle ещё не настроен. Давай настроим за минуту."
+    return (
+        "<b>Kindle ещё не настроен</b>\n\n"
+        "Давай настроим за минуту:\n\n"
+        "1. Сохрани Kindle e-mail.\n"
+        "2. Добавь отправителя бота в Amazon."
+    )
 
 def kindle_sent_text(): return "Отправлено на Kindle. Обычно книга появляется через несколько минут."
 def kindle_file_too_large_text(): return "Файл слишком большой для отправки на Kindle по e-mail."

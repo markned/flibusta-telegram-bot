@@ -262,14 +262,19 @@ def test_kindle_sender_confirmation_flag(tmp_path: Path) -> None:
 
 
 def test_kindle_messages_are_button_first_without_ses_copy() -> None:
-    from app.messages.kindle import kindle_home_text, kindle_setup_text
+    from app.messages.kindle import kindle_home_text, kindle_missing_email_text, kindle_setup_text
 
     setup = kindle_setup_text("books@example.com", "gmail")
     assert "Сохранить Kindle e-mail" in setup
     assert "Amazon SES" not in setup
+    assert "/kindle" not in setup and "/kindle_email" not in setup
     home = kindle_home_text(None, "books@example.com", "gmail")
     assert "Статус" in home
     assert "Amazon SES" not in home
+    assert "/kindle" not in home and "/kindle_email" not in home
+    missing = kindle_missing_email_text()
+    assert "Kindle ещё не настроен" in missing
+    assert "/kindle" not in missing and "/kindle_email" not in missing
 
 
 def test_env_templates_do_not_contain_real_password() -> None:

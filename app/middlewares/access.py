@@ -12,7 +12,7 @@ class AccessMiddleware(BaseMiddleware):
   if isinstance(event,CallbackQuery) and (event.data or '').startswith('access_'): return await handler(event,data)
   access=await self.repo.get_user(user.id)
   if access and access.status=='approved': return await handler(event,data)
-  text='Доступ к боту пока не открыт. Отправь /start, чтобы запросить приглашение.' if access is None else 'Запрос уже отправлен. Я сообщу, когда админ откроет доступ.'
+  text='Доступ к боту пока не открыт. Нажми Start в профиле бота, чтобы запросить приглашение.' if access is None else 'Запрос уже отправлен. Я сообщу, когда админ откроет доступ.'
   if isinstance(event,CallbackQuery):
    await event.answer('Доступ пока не открыт',show_alert=True)
   else: await event.answer(text)

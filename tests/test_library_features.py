@@ -192,7 +192,7 @@ def test_send_search_results_sends_message(monkeypatch):
  monkeypatch.setattr(main,'flibusta',Flib()); main.search_timestamps.clear()
  msg=_FakeMessage()
  run(main.send_search_results(msg,'мастер и маргарита'))
- assert any('Книги' in text for text,_ in msg.answers)
+ assert any('Нашёл книги' in text for text,_ in msg.answers)
 
 def test_text_routing_author_uses_author_not_ai(monkeypatch):
  import app.main as main
@@ -435,6 +435,79 @@ def test_assistant_commands_visible_when_enabled(monkeypatch):
  assert [c.command for c in main._assistant_bot_commands()]==['recommend']
  monkeypatch.setattr(main.settings,'discovery_enabled',True)
  assert [c.command for c in main._assistant_bot_commands()]==['recommend','discover','discover_web']
+
+def test_default_command_menu_is_hidden_for_users(monkeypatch):
+ import app.main as main
+ class Bot:
+  def __init__(self): self.calls=[]
+  async def set_my_commands(self, commands, **kwargs): self.calls.append((commands, kwargs))
+ bot=Bot()
+ monkeypatch.setattr(main.settings,'ui_hide_command_menu_for_users',True)
+ monkeypatch.setattr(main.settings,'ui_show_power_user_commands',False)
+ monkeypatch.setattr(main.settings,'ui_show_admin_commands',False)
+ run(main.setup_bot_commands(bot))
+ assert len(bot.calls)==1
+ commands, kwargs = bot.calls[0]
+ assert commands == []
+ assert type(kwargs['scope']).__name__ == 'BotCommandScopeDefault'
+
+def test_admin_commands_are_scoped_only_to_admins(monkeypatch):
+ import app.main as main
+ class Bot:
+  def __init__(self): self.calls=[]
+  async def set_my_commands(self, commands, **kwargs): self.calls.append((commands, kwargs))
+ bot=Bot()
+ monkeypatch.setattr(main.settings,'ui_hide_command_menu_for_users',True)
+ monkeypatch.setattr(main.settings,'ui_show_power_user_commands',False)
+ monkeypatch.setattr(main.settings,'ui_show_admin_commands',True)
+ monkeypatch.setattr(main.settings,'admin_user_ids','9,10')
+ run(main.setup_bot_commands(bot))
+ assert bot.calls[0][0] == []
+ scoped = bot.calls[1:]
+ assert len(scoped) == 2
+ assert all(type(kwargs['scope']).__name__ == 'BotCommandScopeChat' for _, kwargs in scoped)
+ assert all('admin' in [cmd.command for cmd in commands] for commands, _ in scoped)
+
+def test_power_user_commands_are_opt_in(monkeypatch):
+ import app.main as main
+ class Bot:
+  def __init__(self): self.calls=[]
+  async def set_my_commands(self, commands, **kwargs): self.calls.append((commands, kwargs))
+ bot=Bot()
+ monkeypatch.setattr(main.settings,'ui_hide_command_menu_for_users',True)
+ monkeypatch.setattr(main.settings,'ui_show_power_user_commands',True)
+ monkeypatch.setattr(main.settings,'ui_show_admin_commands',False)
+ run(main.setup_bot_commands(bot))
+ commands = [cmd.command for cmd in bot.calls[0][0]]
+ assert 'start' in commands and 'kindle' in commands
+ assert 'admin' not in commands and 'kindle_email' not in commands
+
+def test_start_and_help_render_button_first_ui(monkeypatch):
+ import app.main as main
+ class Cmd: args=''
+ monkeypatch.setattr(main.settings,'access_control_enabled',False)
+ msg=_FakeMessage()
+ run(main.start(msg, Cmd()))
+ assert any('Библиотека им. Недзвецких' in text for text,_ in msg.answers)
+ assert not any('/search' in text or '/kindle' in text for text,_ in msg.answers)
+ help_msg=_FakeMessage()
+ run(main.help_command(help_msg))
+ assert help_msg.answers and 'Как пользоваться' in help_msg.answers[-1][0]
+ assert '/search' not in help_msg.answers[-1][0] and '/kindle' not in help_msg.answers[-1][0]
+
+def test_help_reply_button_opens_help(monkeypatch):
+ import app.main as main
+ msg=_FakeMessage('❓ Помощь')
+ run(main.search_text(msg))
+ assert msg.answers and 'Как пользоваться' in msg.answers[-1][0]
+
+def test_home_inline_keyboard_has_main_actions():
+ from app.ui.home import home_keyboard, home_text
+ text=home_text()
+ assert 'Напиши название' in text and '/search' not in text
+ rows=home_keyboard().inline_keyboard
+ labels=[button.text for row in rows for button in row]
+ assert {'🔎 Как искать','⭐ Избранное','🕘 История','📚 Последняя книга','⚙️ Kindle','❓ Помощь'} <= set(labels)
 
 def _book_details_for_card(annotation='Short', cover_url=None):
  from app.flibusta import BookDetails, DownloadFormat

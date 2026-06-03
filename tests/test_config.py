@@ -85,3 +85,13 @@ def test_cover_and_metadata_settings_defaults(monkeypatch):
     assert settings.kindle_metadata_polish_enabled is True
     assert settings.kindle_metadata_tool == "ebook-meta"
     assert settings.kindle_filename_template == "{author} - {title}"
+
+
+def test_clean_ui_settings_defaults(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    settings = Settings(_env_file=None)
+    assert settings.ui_hide_command_menu_for_users is True
+    assert settings.ui_show_admin_commands is False
+    assert settings.ui_show_power_user_commands is False
+    assert settings.ui_home_inline_buttons is True
+    assert settings.ui_reply_keyboard_enabled is True

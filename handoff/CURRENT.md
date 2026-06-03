@@ -101,3 +101,16 @@ Use `SMTP_PROVIDER=gmail`, host `smtp.gmail.com`, port `587`, STARTTLS true, and
 - no image bytes are cached in SQLite or memory; only cover metadata/negative results are cached
 - `COVER_PROVIDER_ORDER=flibusta` is the fastest conservative setting if external cover lookup feels slow
 - keep `KINDLE_WORKER_CONCURRENCY=1` on the low-memory VPS
+
+## Completed in clean Telegram UI pass
+- normal users now get an empty Telegram slash-command menu by default
+- added `UI_HIDE_COMMAND_MENU_FOR_USERS`, `UI_SHOW_ADMIN_COMMANDS`, `UI_SHOW_POWER_USER_COMMANDS`, `UI_HOME_INLINE_BUTTONS`, and `UI_REPLY_KEYBOARD_ENABLED`
+- `/start` and `/help` remain hidden fallbacks and render button-first home/help screens
+- common actions are reachable through persistent reply buttons and inline home buttons
+- Kindle setup remains command-compatible but user-facing flows use buttons only
+- search/no-results/book-card copy and buttons were simplified
+
+## Clean UI operational notes
+- production default is `UI_HIDE_COMMAND_MENU_FOR_USERS=true` and `UI_SHOW_ADMIN_COMMANDS=false`
+- set `UI_SHOW_ADMIN_COMMANDS=true` only if admins want a small scoped menu
+- set `UI_SHOW_POWER_USER_COMMANDS=true` only for debugging; it restores a compact default command menu

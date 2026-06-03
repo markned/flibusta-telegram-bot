@@ -502,6 +502,7 @@ def _kindle_home_keyboard(settings: KindleSettings | None):
             InlineKeyboardButton(text="📨 Показать отправителя", callback_data="kindle_sender"),
             InlineKeyboardButton(text="❓ Инструкция", callback_data="kindle_setup_help"),
         )
+        kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
         return kb.as_markup()
 
     kb.row(InlineKeyboardButton(text="📮 Изменить Kindle e-mail", callback_data="kindle_email_edit"))
@@ -513,6 +514,7 @@ def _kindle_home_keyboard(settings: KindleSettings | None):
         InlineKeyboardButton(text="❓ Инструкция", callback_data="kindle_setup_help"),
     )
     kb.row(InlineKeyboardButton(text="🗑 Удалить Kindle e-mail", callback_data="kindle_remove_confirm"))
+    kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
     return kb.as_markup()
 
 
@@ -527,6 +529,7 @@ def _kindle_setup_keyboard():
     kb.row(InlineKeyboardButton(text="📮 Сохранить Kindle e-mail", callback_data="kindle_email_edit"))
     kb.row(InlineKeyboardButton(text="📨 Показать отправителя", callback_data="kindle_sender"))
     kb.row(InlineKeyboardButton(text="⚙️ Kindle меню", callback_data="kindle_home"))
+    kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
     return kb.as_markup()
 
 
@@ -537,4 +540,5 @@ def _kindle_format_keyboard(current: str):
         kb.button(text=label, callback_data=f"kindle_fmt:{fmt}")
     kb.adjust(2)
     kb.row(InlineKeyboardButton(text="⚙️ Kindle меню", callback_data="kindle_home"))
+    kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
     return kb.as_markup()

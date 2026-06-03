@@ -19,6 +19,8 @@ from aiogram.exceptions import TelegramBadRequest, TelegramEntityTooLarge, Teleg
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeChat,
+    BotCommandScopeDefault,
     BufferedInputFile,
     CallbackQuery,
     InlineKeyboardButton,
@@ -98,6 +100,14 @@ from app.ui.library import (
     search_results_keyboard as _search_results_keyboard,
     search_results_text as _search_results_text,
 )
+from app.ui.home import (
+    back_home_keyboard,
+    help_keyboard,
+    help_text,
+    home_keyboard,
+    home_text,
+    search_help_text,
+)
 
 settings = Settings()
 logging.basicConfig(
@@ -112,6 +122,7 @@ FAVORITES_BUTTON = "⭐ Избранное"
 HISTORY_BUTTON = "🕘 История"
 LAST_BUTTON = "📚 Последняя"
 KINDLE_BUTTON = "⚙️ Kindle"
+HELP_BUTTON = "❓ Помощь"
 
 router = Router()
 
@@ -224,6 +235,37 @@ discovery_recommender = DiscoveryRecommender(
 )
 
 
+def _reply_keyboard():
+    return main_reply_keyboard() if settings.ui_reply_keyboard_enabled else None
+
+
+def _home_inline_keyboard():
+    return home_keyboard() if settings.ui_home_inline_buttons else None
+
+
+async def send_home(message: Message) -> None:
+    if not settings.ui_home_inline_buttons:
+        await telegram_retry(lambda: message.answer(home_text(), reply_markup=_reply_keyboard()))
+        return
+    await telegram_retry(
+        lambda: message.answer(
+            home_text(),
+            reply_markup=_home_inline_keyboard(),
+        )
+    )
+    if settings.ui_reply_keyboard_enabled:
+        await telegram_retry(lambda: message.answer("Главное меню — внизу.", reply_markup=main_reply_keyboard()), attempts=1)
+
+
+async def send_help(message: Message) -> None:
+    await telegram_retry(
+        lambda: message.answer(
+            help_text(),
+            reply_markup=help_keyboard(),
+        )
+    )
+
+
 @router.message(Command("start"))
 async def start(message: Message, command: CommandObject) -> None:
     log_user_action(message.from_user, message.chat.id, "start")
@@ -231,7 +273,8 @@ async def start(message: Message, command: CommandObject) -> None:
         existing = await access_repo.get_user(message.from_user.id)
         arg = (command.args or "").strip()
         if arg.startswith("invite_") and await access_repo.redeem_invite(arg.removeprefix("invite_"), message.from_user.id, message.from_user.username, message.from_user.full_name):
-            await message.answer("Приглашение принято. Добро пожаловать в библиотеку.", reply_markup=main_reply_keyboard())
+            await message.answer("Приглашение принято. Добро пожаловать в библиотеку.", reply_markup=_reply_keyboard())
+            await send_home(message)
             return
         if existing and existing.status == "blocked":
             await message.answer("Доступ к библиотеке не открыт.")
@@ -244,16 +287,12 @@ async def start(message: Message, command: CommandObject) -> None:
         if existing.status != "approved":
             await message.answer("Запрос уже отправлен.\n\nЯ сообщу, когда администратор откроет доступ.")
             return
-    await telegram_retry(
-        lambda: message.answer(
-            "<b>Библиотека</b>\n\nЧто хочется почитать?\n\n"
-            "Напиши название, автора или просто опиши книгу:\n"
-            "«Дюна»\n"
-            "«Пелевин»\n"
-            "«что-то как 1984, но современнее»",
-            reply_markup=main_reply_keyboard(),
-        )
-    )
+    await send_home(message)
+
+
+@router.message(Command("help"))
+async def help_command(message: Message) -> None:
+    await send_help(message)
 
 
 @router.message(Command("search"))
@@ -262,7 +301,7 @@ async def search_command(message: Message, command: CommandObject) -> None:
     if not query:
         log_user_action(message.from_user, message.chat.id, "search_empty")
         await telegram_retry(
-            lambda: message.answer("Напиши запрос после команды: /search мастер и маргарита")
+            lambda: message.answer("Напиши название книги обычным сообщением — я поищу.")
         )
         return
     await send_search_results(message, query)
@@ -274,7 +313,7 @@ async def author_command(message: Message, command: CommandObject) -> None:
     if not query:
         log_user_action(message.from_user, message.chat.id, "author_search_empty")
         await telegram_retry(
-            lambda: message.answer("Напиши автора после команды: /author сапковский")
+            lambda: message.answer("Напиши имя автора обычным сообщением — я найду его книги.")
         )
         return
     await send_author_results(message, query)
@@ -287,7 +326,7 @@ async def recommend_command(message: Message, command: CommandObject) -> None:
         return
     query=(command.args or "").strip()
     if not query:
-        await message.answer("Опиши книгу, автора или настроение — я сам разберу запрос.")
+        await message.answer("Опиши книгу, автора или настроение обычным сообщением — я сам разберу запрос.")
         return
     if await send_discovery_results(message, query, mode="recommend", use_web=False):
         return
@@ -300,7 +339,7 @@ async def discover_command(message: Message, command: CommandObject) -> None:
         return
     query=(command.args or "").strip()
     if not query:
-        await message.answer("Напиши тему после команды: /discover немецкий постмодерн")
+        await message.answer("Напиши тему подборки обычным сообщением.")
         return
     use_web=settings.discovery_enabled and settings.discovery_use_web
     if await send_discovery_results(message, query, mode="discover", use_web=use_web):
@@ -314,7 +353,7 @@ async def discover_web_command(message: Message, command: CommandObject) -> None
         return
     query=(command.args or "").strip()
     if not query:
-        await message.answer("Напиши тему после команды: /discover_web антиутопия")
+        await message.answer("Напиши тему подборки обычным сообщением.")
         return
     configured=settings.discovery_web_active
     if not configured:
@@ -341,11 +380,17 @@ async def access_decision(callback: CallbackQuery) -> None:
     await callback.answer("Готово")
     await callback.message.edit_text((callback.message.text or "") + ("\n\n✅ Доступ открыт" if approved else "\n\n❌ Отклонено"))
     if approved:
-        await callback.bot.send_message(user_id,"Администратор открыл доступ. Можно пользоваться ботом: /start")
+        await callback.bot.send_message(user_id,"Администратор открыл доступ. Можно пользоваться ботом: напиши название книги или нажми кнопку меню.",reply_markup=_reply_keyboard())
 
 @router.message(Command("favorites", "fav"))
 async def favorites_command(message: Message) -> None:
     await _send_favorites_page(message, message.from_user.id, 0)
+
+
+@router.callback_query(F.data == "home_favorites")
+async def home_favorites(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    await _send_favorites_page(callback.message, callback.from_user.id, 0)
 
 @router.callback_query(F.data.startswith("fav_page:"))
 async def favorites_page(callback: CallbackQuery) -> None:
@@ -354,23 +399,72 @@ async def favorites_page(callback: CallbackQuery) -> None:
 
 @router.message(Command("history"))
 async def history_command(message: Message) -> None:
-    await message.answer(_history_text(await download_history_repo.recent(message.from_user.id)))
+    await _send_history_message(message, message.from_user.id)
 
 @router.message(Command("history_failed"))
 async def history_failed_command(message: Message) -> None:
-    await message.answer(_history_text(await download_history_repo.recent(message.from_user.id, status="failed"), failed=True))
+    await _send_history_message(message, message.from_user.id, failed=True)
+
+
+@router.callback_query(F.data == "home_history")
+async def home_history(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    await _send_history_message(callback.message, callback.from_user.id)
 
 @router.message(Command("last"))
 async def last_command(message: Message) -> None:
-    item = await last_books_repo.get(message.from_user.id)
+    await _send_last_message(message, message.from_user.id)
+
+
+@router.callback_query(F.data == "home_last")
+async def home_last(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    await _send_last_message(callback.message, callback.from_user.id)
+
+
+@router.callback_query(F.data == "home")
+async def home_callback(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    try:
+        await callback.message.edit_text(home_text(), reply_markup=_home_inline_keyboard())
+    except TelegramBadRequest:
+        await send_home(callback.message)
+
+
+@router.callback_query(F.data == "home_help")
+async def help_callback(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    try:
+        await callback.message.edit_text(help_text(), reply_markup=help_keyboard())
+    except TelegramBadRequest:
+        await send_help(callback.message)
+
+
+@router.callback_query(F.data == "home_search_help")
+async def search_help_callback(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    try:
+        await callback.message.edit_text(search_help_text(), reply_markup=back_home_keyboard())
+    except TelegramBadRequest:
+        await callback.message.answer(search_help_text(), reply_markup=back_home_keyboard())
+
+
+async def _send_history_message(message: Message, user_id: int, *, failed: bool = False) -> None:
+    items = await download_history_repo.recent(user_id, status="failed" if failed else "sent")
+    await message.answer(_history_text(items, failed=failed), reply_markup=back_home_keyboard())
+
+
+async def _send_last_message(message: Message, user_id: int) -> None:
+    item = await last_books_repo.get(user_id)
     if item is None:
-        await message.answer("<b>Последняя книга</b>\n\nПока пусто. Открой любую карточку — и она появится здесь.")
+        await message.answer("<b>Последняя книга</b>\n\nПока пусто. Открой любую карточку — и она появится здесь.", reply_markup=back_home_keyboard())
         return
-    preferred = await _preferred_format(message.from_user.id) or "epub"
+    preferred = await _preferred_format(user_id) or "epub"
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Открыть карточку", callback_data=f"book:{item.book_id}"))
-    kb.row(InlineKeyboardButton(text=f"Скачать {preferred.upper()}", callback_data=f"dl:{item.book_id}:{preferred}"), InlineKeyboardButton(text="📤 Kindle", callback_data=f"kindle:{item.book_id}"))
+    kb.row(InlineKeyboardButton(text=f"⬇️ {preferred.upper()}", callback_data=f"dl:{item.book_id}:{preferred}"), InlineKeyboardButton(text="📤 Kindle", callback_data=f"kindle:{item.book_id}"))
     kb.row(InlineKeyboardButton(text="⭐ В избранное", callback_data=f"fav_add:{item.book_id}"))
+    kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
     await message.answer(f"<b>Последняя книга</b>\n\n<b>{escape(item.title)}</b>" + (f"\n{escape(item.author)}" if item.author else ""), reply_markup=kb.as_markup())
 
 @router.message(Command("admin_cache_stats"))
@@ -473,7 +567,10 @@ async def search_text(message: Message) -> None:
     if text == LAST_BUTTON:
         await last_command(message); return
     if text == KINDLE_BUTTON:
-        await message.answer("Kindle: /kindle — меню, /kindle_setup — настройка.")
+        await message.answer("Открываю Kindle-меню.", reply_markup=back_home_keyboard())
+        return
+    if text == HELP_BUTTON:
+        await send_help(message)
         return
     decision = route_intent(text)
     logger.info("user_id=%s intent=%s confidence=%.2f reasons=%s query_len=%s", message.from_user.id, decision.kind.value, decision.confidence, len(decision.reasons), len(text))
@@ -1653,10 +1750,10 @@ def _allow_search(user_id: int) -> bool:
 async def _send_no_results(message: Message, query: str) -> None:
     sid=uuid4().hex[:10]; retry_sessions[sid]=query; _prune_sessions(retry_sessions)
     kb=InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Попробовать короче",callback_data=f"retry_short:{sid}"))
+    kb.row(InlineKeyboardButton(text="Искать короче",callback_data=f"retry_short:{sid}"))
     kb.row(InlineKeyboardButton(text="Искать как книгу",callback_data=f"retry_book:{sid}"),InlineKeyboardButton(text="Искать как автора",callback_data=f"retry_author:{sid}"))
-    kb.row(InlineKeyboardButton(text="Убрать кавычки и повторить",callback_data=f"retry_clean:{sid}"))
-    await telegram_retry(lambda: message.answer(f"Ничего не найдено по запросу: <b>{escape(query)}</b>",reply_markup=kb.as_markup()))
+    kb.row(InlineKeyboardButton(text="🏠 В меню",callback_data="home"))
+    await telegram_retry(lambda: message.answer(f"<b>Ничего не нашёл</b>\nЗапрос: <b>{escape(query)}</b>\n\nМожно попробовать короче или искать как автора.",reply_markup=kb.as_markup()))
 
 def _dedupe_books_preserving_order(items):
     seen=set(); result=[]
@@ -1752,28 +1849,43 @@ def _assistant_bot_commands() -> list[BotCommand]:
     return commands
 
 async def setup_bot_commands(bot: Bot) -> None:
-    await bot.set_my_commands(
-        [
-            BotCommand(command="search", description="поиск книг"),
-            BotCommand(command="author", description="поиск авторов"),
-            *(_assistant_bot_commands() if _assistant_ui_enabled() else []),
-            BotCommand(command="kindle_email", description="сохранить Kindle e-mail"),
-            BotCommand(command="kindle_help", description="настройка Send to Kindle"),
-            BotCommand(command="kindle_setup", description="настройка Kindle"),
-            BotCommand(command="kindle_status", description="статус Kindle"),
-            BotCommand(command="kindle_remove", description="удалить Kindle e-mail"),
-            BotCommand(command="kindle_history", description="история Kindle"),
-            BotCommand(command="kindle_format", description="формат Kindle"),
-            BotCommand(command="kindle_retry", description="повторить Kindle"),
-            BotCommand(command="kindle", description="меню Kindle"),
-            BotCommand(command="favorites", description="избранные книги"),
-            BotCommand(command="history", description="история отправок"),
-            BotCommand(command="history_failed", description="неудачные отправки"),
-            BotCommand(command="last", description="последняя книга"),
-            BotCommand(command="start", description="открыть меню"),
-            BotCommand(command="admin", description="админка"),
-        ]
-    )
+    if settings.ui_hide_command_menu_for_users and not settings.ui_show_power_user_commands:
+        await bot.set_my_commands([], scope=BotCommandScopeDefault())
+    else:
+        await bot.set_my_commands(_power_user_bot_commands(), scope=BotCommandScopeDefault())
+
+    if not settings.ui_show_admin_commands:
+        return
+    admin_commands = _admin_bot_commands()
+    for admin_id in settings.admin_ids:
+        await bot.set_my_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+
+
+def _power_user_bot_commands() -> list[BotCommand]:
+    commands = [
+        BotCommand(command="start", description="открыть меню"),
+        BotCommand(command="help", description="помощь"),
+        BotCommand(command="search", description="поиск книг"),
+        BotCommand(command="author", description="поиск авторов"),
+        BotCommand(command="kindle", description="меню Kindle"),
+        BotCommand(command="favorites", description="избранное"),
+        BotCommand(command="history", description="история"),
+        BotCommand(command="last", description="последняя книга"),
+    ]
+    if _assistant_ui_enabled():
+        commands.extend(_assistant_bot_commands())
+    return commands
+
+
+def _admin_bot_commands() -> list[BotCommand]:
+    commands = [
+        BotCommand(command="admin", description="админка"),
+        BotCommand(command="admin_kindle_health", description="Kindle health"),
+        BotCommand(command="admin_intent", description="проверить intent"),
+    ]
+    if settings.discovery_enabled:
+        commands.append(BotCommand(command="admin_discovery_status", description="discovery status"))
+    return commands
 
 
 async def main() -> None:

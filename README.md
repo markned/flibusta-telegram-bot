@@ -7,13 +7,27 @@
 - умный поиск: обычный ввод сам пытается понять, книга это или автор;
 - любой обычный текст сразу проходит через умный поиск без выбора режима;
 - карточка книги и выбор формата;
-- постоянное меню в Telegram;
+- чистый Telegram UI: обычный текст, нижняя клавиатура и inline-кнопки;
 - SQLite-кэш для поиска и карточек;
-- избранное, история отправок и команда `/last`;
+- избранное, история отправок и последняя книга через кнопки;
 - более осторожный smart search для неоднозначных запросов;
 - запоминание предпочитаемого формата пользователя в SQLite;
 - отправка книг на Kindle по e-mail через generic SMTP/Gmail;
 - опциональный AI-помощник для формулировки книжных запросов.
+
+
+## Пользовательский интерфейс
+
+Обычным пользователям бот не показывает slash-команды в Telegram menu. Основной сценарий простой: человек пишет название, автора или настроение, а частые действия открывает кнопками. Команды остаются скрытыми техническими fallback-ручками и продолжают работать, если набрать их вручную.
+
+Главная нижняя клавиатура:
+- ⭐ Избранное
+- 🕘 История
+- 📚 Последняя
+- ⚙️ Kindle
+- ❓ Помощь
+
+Стартовый экран объясняет примеры запросов и даёт inline-кнопки для поиска, Kindle, избранного, истории и помощи. Админские команды скрыты от обычных пользователей; при необходимости их можно включить только для админских чатов через `UI_SHOW_ADMIN_COMMANDS=true`. Для отладки compact command menu можно вернуть флагом `UI_SHOW_POWER_USER_COMMANDS=true`, но production default — пустое меню команд.
 
 ## Локальный запуск
 ```bash
@@ -75,21 +89,11 @@ The UI is button-first: open `⚙️ Kindle` and follow the buttons. Slash comma
 2. Add `SMTP_FROM_EMAIL` to **Amazon Approved Personal Document E-mail List**. Amazon rejects personal documents from unapproved senders, so this step is required.
 3. Save the Kindle e-mail in the bot.
 4. Optionally press “Отправить тест”.
-5. Use `📤 Send to Kindle` in a book card.
+5. Use `📤 Kindle EPUB` or `📤 На Kindle` in a book card.
 
-Kindle commands:
-- `/kindle` — button menu
-- `/kindle_email` — save Kindle e-mail
-- `/kindle_help` / `/kindle_setup` — setup guide
-- `/kindle_status` — current settings
-- `/kindle_remove` — delete Kindle e-mail
-- `/kindle_format` — preferred Kindle format
-- `/kindle_history` — delivery history
+Kindle is button-first. Open `⚙️ Kindle`, then use the buttons to save the Kindle address, show the sender, change format, send a test, view history, or delete the address. Hidden Kindle slash commands still exist for maintenance, but they are intentionally not shown in Telegram's command menu.
 
-Admin diagnostics:
-- `/admin_kindle_health`
-- `/admin_kindle_failures`
-- `/admin_kindle_delivery <id>`
+Admin diagnostics remain available manually and can be exposed only to admins with scoped command menus if `UI_SHOW_ADMIN_COMMANDS=true`.
 
 ### Queue behavior and limitations
 
@@ -100,7 +104,7 @@ Kindle sending uses a lightweight in-process async queue. It keeps Telegram resp
 - SQLite lives at `DATABASE_PATH`; startup runs small idempotent migrations automatically.
 - Legacy `user_prefs.json` is imported once and renamed to `user_prefs.json.migrated`.
 - The `approved_sender_confirmed` flag records whether the user has said they added the bot sender to Amazon.
-- Useful admin commands: `/admin_kindle_health`, `/admin_kindle_failures`, `/admin_kindle_delivery <id>`, `/admin_export_settings`, `/admin_cleanup_deliveries`.
+- Admin commands remain hidden by default. Type them manually or enable a small admin-only command menu with `UI_SHOW_ADMIN_COMMANDS=true`.
 - Gmail private-use deployments should keep `KINDLE_WORKER_CONCURRENCY=1`.
 
 ### Kindle troubleshooting
@@ -128,9 +132,8 @@ Relevant env vars: `BOOK_COVER_UI_ENABLED`, `COVER_LOOKUP_ENABLED`, `COVER_PROVI
 
 ## Product features
 
-- `/favorites` or `/fav` — saved books; only metadata is stored, never the downloaded book files.
-- `/history` and `/history_failed` — recent Telegram/Kindle sends and failures.
-- `/last` — reopen the last book with quick actions.
+- Favorites, history, and the last opened book are available through buttons; only metadata is stored, never downloaded book files.
+- Hidden manual commands still exist for maintenance and debugging, but are not part of the normal UI.
 - Smart search strips format hints like `epub`, recognizes quoted titles and author-looking queries, and shows books plus authors together when the query is ambiguous.
 - Flibusta search/details responses are cached in SQLite with short TTLs to make repeated requests faster and gentler on the source site.
 - Long annotations are shortened in cards; the full text is available by button.
