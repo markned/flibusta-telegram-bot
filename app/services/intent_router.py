@@ -17,6 +17,20 @@ DISCOVERY_MARKERS=('лучшие','топ','новые','современные'
 DROP_WORDS=('подборка','подбери','посоветуй','порекомендуй','книга','книги','хорошего','хорошая','хорошую','литература','что почитать','что-то','пожалуйста')
 TITLE_CUES={'исповедь','дневник','идиот','дюна','мы'}
 KNOWN_SURNAMES={'толстой','достоевский','пелевин','сорокин','булгаков','оруэлл','хаксли','замятин'}
+KNOWN_AUTHOR_NAMES={
+ ('лев','толстой'):'Лев Толстой',
+ ('лев','николаевич','толстой'):'Лев Толстой',
+ ('федор','достоевский'):'Фёдор Достоевский',
+ ('фёдор','достоевский'):'Фёдор Достоевский',
+ ('федор','михайлович','достоевский'):'Фёдор Достоевский',
+ ('фёдор','михайлович','достоевский'):'Фёдор Достоевский',
+ ('михаил','булгаков'):'Михаил Булгаков',
+ ('виктор','пелевин'):'Виктор Пелевин',
+ ('владимир','сорокин'):'Владимир Сорокин',
+ ('джордж','оруэлл'):'Джордж Оруэлл',
+ ('олдос','хаксли'):'Олдос Хаксли',
+ ('евгений','замятин'):'Евгений Замятин',
+}
 FIRST_NAMES={'эдит','лев','федор','фёдор','михаил','джордж','виктор','харуки','пол','томас','петр','пётр'}
 
 def route_intent(query:str)->IntentDecision:
@@ -30,11 +44,11 @@ def route_intent(query:str)->IntentDecision:
   discovery=any(re.search(rf'\b{re.escape(marker)}\b',low) for marker in DISCOVERY_MARKERS) or bool(re.search(r'\bкак\s+[А-ЯЁA-Z]',cleaned)) or ('постмодерн' in low and len(cleaned.split())>1)
   kind=IntentKind.DISCOVERY_OPTIONAL if discovery else IntentKind.RECOMMENDATION
   return _d(kind,.9,query,cleaned,topic or None,None,None,topic,refs,a.format_hint,['recommendation_pattern'])
- if a.likely_author and cleaned.split()[0].lower() in FIRST_NAMES:
-  return _d(IntentKind.AUTHOR_SEARCH,.84,query,cleaned,cleaned,None,None,None,refs,a.format_hint,['person_name'])
  detected=detect_author_title_query(cleaned)
  if detected:
   author,title=detected; return _d(IntentKind.AUTHOR_TITLE_SEARCH,.86,query,cleaned,cleaned,author,title,None,refs,a.format_hint,['author_title_heuristic'])
+ if a.likely_author and cleaned.split()[0].lower() in FIRST_NAMES:
+  return _d(IntentKind.AUTHOR_SEARCH,.84,query,cleaned,cleaned,None,None,None,refs,a.format_hint,['person_name'])
  if a.quoted_title:
   return _d(IntentKind.EXACT_SEARCH,.98,query,cleaned,cleaned,None,None,None,refs,a.format_hint,['quoted_title'])
  if len(cleaned.split()) <= 5:
@@ -56,9 +70,32 @@ def detect_author_title_query(query:str)->tuple[str,str]|None:
  for sep in (' - ',': '):
   if sep in text:
    left,right=text.split(sep,1); return (left.strip(),right.strip()) if _looks_surname(left.split()[-1].lower()) else ((right.strip(),left.strip()) if _looks_surname(right.split()[-1].lower()) else None)
+ if _looks_person_name_only(low):
+  return None
+ known=_known_author_at_edge(words, low)
+ if known:
+  return known
  if _looks_surname(low[-1]): return words[-1], ' '.join(words[:-1])
  if _looks_surname(low[0]): return words[0], ' '.join(words[1:])
  return None
+def _known_author_at_edge(words:list[str], low:list[str])->tuple[str,str]|None:
+ for size in (3,2):
+  if len(words) > size:
+   start=tuple(low[:size])
+   if start in KNOWN_AUTHOR_NAMES:
+    return KNOWN_AUTHOR_NAMES[start], ' '.join(words[size:])
+   end=tuple(low[-size:])
+   if end in KNOWN_AUTHOR_NAMES:
+    return KNOWN_AUTHOR_NAMES[end], ' '.join(words[:-size])
+ return None
+def _looks_person_name_only(low:list[str])->bool:
+ if len(low)==2 and low[0] in FIRST_NAMES and _looks_surname(low[1]):
+  return True
+ if len(low)==3 and low[0] in FIRST_NAMES and _looks_patronymic(low[1]) and _looks_surname(low[2]):
+  return True
+ return False
 def _looks_surname(word:str)->bool:
  return word in KNOWN_SURNAMES or any(word.endswith(s) for s in ('ов','ев','ёв','ин','ын','ский','цкий','ой','ая'))
+def _looks_patronymic(word:str)->bool:
+ return word.endswith(('вич','вна','ична','ович','евич','инична'))
 def _d(kind,conf,orig,cleaned,search,author,title,topic,refs,hint,reasons): return IntentDecision(kind,conf,orig,cleaned,search,author,title,topic,refs,hint,reasons)

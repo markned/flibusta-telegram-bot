@@ -481,8 +481,6 @@ async def search_text(message: Message) -> None:
     if decision.kind == IntentKind.AUTHOR_TITLE_SEARCH:
         if await send_author_title_results(message, decision.author_part or "", decision.title_part or ""):
             return
-        if await send_reversed_author_title_results(message, text):
-            return
         await send_smart_results(message, text)
         return
     if decision.kind == IntentKind.AUTHOR_SEARCH:
@@ -1151,12 +1149,9 @@ async def send_author_title_results(message: Message, author: str, title: str) -
         )
     except FlibustaError:
         return False
-    author_norm = _norm(author)
-    surname = _norm(author.split()[-1])
-    matched = [
-        item for item in results
-        if item.author and (author_norm in _norm(item.author) or surname in _norm(item.author))
-    ]
+    matched = _filter_author_title_results(results, author)
+    if not matched:
+        matched = await _search_author_books_for_title(author, title)
     if not matched:
         return False
     session = _create_search_session(
@@ -1170,10 +1165,56 @@ async def send_author_title_results(message: Message, author: str, title: str) -
     return True
 
 async def send_reversed_author_title_results(message: Message, query: str) -> bool:
-    words = query.split()
-    if not 2 <= len(words) <= 4:
+    decision = route_intent(query)
+    if decision.kind != IntentKind.AUTHOR_TITLE_SEARCH:
         return False
-    return await send_author_title_results(message, words[-1], " ".join(words[:-1]))
+    return await send_author_title_results(message, decision.author_part or "", decision.title_part or "")
+
+
+def _filter_author_title_results(results: list[SearchResult], author: str) -> list[SearchResult]:
+    return [item for item in results if item.author and _author_name_matches(author, item.author)]
+
+
+def _author_name_matches(expected: str, actual: str) -> bool:
+    expected_norm = _norm(expected)
+    actual_norm = _norm(actual)
+    if not expected_norm or not actual_norm:
+        return False
+    if expected_norm in actual_norm or actual_norm in expected_norm:
+        return True
+    parts = [part for part in expected_norm.split() if part]
+    surname = parts[-1] if parts else ""
+    return bool(surname and surname in actual_norm)
+
+
+def _title_matches(expected: str, actual: str) -> bool:
+    expected_norm = _norm(_base_title(expected))
+    actual_norm = _norm(_base_title(actual))
+    if not expected_norm or not actual_norm:
+        return False
+    return actual_norm == expected_norm or expected_norm in actual_norm or actual_norm in expected_norm
+
+
+async def _search_author_books_for_title(author: str, title: str) -> list[SearchResult]:
+    try:
+        authors = _rank_authors(
+            await flibusta.search_authors(_clean_query(author), limit=min(settings.search_results_limit, 10)),
+            author,
+        )
+    except (AttributeError, FlibustaError):
+        return []
+
+    for candidate in authors[:3]:
+        if not _author_name_matches(author, candidate.name):
+            continue
+        try:
+            author_name, books = await flibusta.author_books(candidate.author_id, limit=settings.search_results_limit)
+        except (AttributeError, FlibustaError):
+            continue
+        matched = [SearchResult(item.book_id, item.title, item.author or author_name or candidate.name) for item in books if _title_matches(title, item.title)]
+        if matched:
+            return _rank_and_dedupe_books(matched, title)
+    return []
 
 
 async def send_author_results(message: Message, query: str) -> None:

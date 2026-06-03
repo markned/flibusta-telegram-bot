@@ -309,8 +309,41 @@ def test_admin_intent_is_admin_only_and_dry_run(monkeypatch):
 
 def test_case_insensitive_author_title_detection():
  from app.services.intent_router import IntentKind, route_intent
- for query in ['Исповедь Толстой','исповедь толстой','Толстой Исповедь','толстой исповедь','Идиот Достоевский','идиот достоевский','Преступление и наказание Достоевский','преступление и наказание достоевский']:
+ for query in ['Исповедь Толстой','исповедь толстой','Толстой Исповедь','толстой исповедь','Идиот Достоевский','идиот достоевский','Преступление и наказание Достоевский','преступление и наказание достоевский','Исповедь Лев Толстой','исповедь лев толстой','Лев Толстой Исповедь','лев толстой исповедь','Идиот Федор Достоевский','идиот федор достоевский','Преступление и наказание Федор Достоевский','преступление и наказание федор достоевский']:
   assert route_intent(query).kind==IntentKind.AUTHOR_TITLE_SEARCH
+ d=route_intent('Исповедь Лев Толстой')
+ assert d.author_part=='Лев Толстой' and d.title_part=='Исповедь'
+ d=route_intent('Лев Толстой Исповедь')
+ assert d.author_part=='Лев Толстой' and d.title_part=='Исповедь'
+
+def test_author_title_search_full_author_name_filters_bad_literal(monkeypatch):
+ import app.main as main
+ class Flib:
+  async def search(self,q,limit):
+   assert q=='Исповедь'
+   return [SearchResult('bad','Исповедь королевы','Не Толстой'),SearchResult('ok','Исповедь','Лев Толстой')]
+ monkeypatch.setattr(main,'flibusta',Flib())
+ msg=_FakeMessage()
+ assert run(main.send_author_title_results(msg,'Лев Толстой','Исповедь')) is True
+ assert msg.answers and 'Лев Толстой' in msg.answers[-1][0]
+ assert 'королевы' not in msg.answers[-1][0]
+
+def test_author_title_search_falls_back_to_author_books(monkeypatch):
+ import app.main as main
+ class Flib:
+  async def search(self,q,limit):
+   assert q=='Исповедь'
+   return [SearchResult('bad','Исповедь королевы','Другой автор')]
+  async def search_authors(self,q,limit):
+   assert q=='Лев Толстой'
+   return [AuthorResult('42','Лев Толстой')]
+  async def author_books(self,author_id,limit):
+   assert author_id=='42'
+   return 'Лев Толстой',[SearchResult('ok','Исповедь','Лев Толстой'),SearchResult('other','Война и мир','Лев Толстой')]
+ monkeypatch.setattr(main,'flibusta',Flib())
+ msg=_FakeMessage()
+ assert run(main.send_author_title_results(msg,'Лев Толстой','Исповедь')) is True
+ assert msg.answers and 'Исповедь' in msg.answers[-1][0] and 'Война' not in msg.answers[-1][0]
 
 def test_clarifier_examples_are_neutral():
  from app.services.intent_router import route_intent
