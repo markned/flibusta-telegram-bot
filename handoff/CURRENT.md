@@ -130,3 +130,9 @@ Use `SMTP_PROVIDER=gmail`, host `smtp.gmail.com`, port `587`, STARTTLS true, and
 - Kindle and PocketBook share one SMTP sender, one queue, retry limits, history, EPUB metadata polishing and cover embedding
 - book cards now use `📤 На читалку`; users choose Kindle or PocketBook only when both are configured
 - legacy Kindle callbacks and hidden commands remain compatible
+
+## Search quality baseline
+- added 50 real Russian-language golden routing cases covering exact titles, authors, author+title queries and broad recommendations
+- regression cases now fail CI individually; documented backlog cases participate in the measured 86% baseline floor
+- `make search-quality` prints the current routing score and the exact known gaps without network access
+- `make test-search` now includes the resolver and golden search suite
