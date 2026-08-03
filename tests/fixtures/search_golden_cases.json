@@ -23,8 +23,10 @@
   {"query": "Харуки Мураками", "kind": "author_search", "tier": "regression"},
   {"query": "Джордж Оруэлл", "kind": "author_search", "tier": "regression"},
   {"query": "Пол Остер", "kind": "author_search", "tier": "regression"},
-  {"query": "Аркадий Стругацкий", "kind": "author_search", "tier": "backlog", "note": "Имя отсутствует в маленьком словаре имён"},
-  {"query": "Антон Чехов", "kind": "author_search", "tier": "backlog", "note": "Имя отсутствует в маленьком словаре имён"},
+  {"query": "Аркадий Стругацкий", "kind": "author_search", "tier": "regression"},
+  {"query": "аркадий стругацкий", "kind": "author_search", "tier": "regression"},
+  {"query": "Антон Чехов", "kind": "author_search", "tier": "regression"},
+  {"query": "антон чехов", "kind": "author_search", "tier": "regression"},
 
   {"query": "Исповедь Толстой", "kind": "author_title_search", "author": "толстой", "title": "исповедь", "tier": "regression"},
   {"query": "исповедь толстой", "kind": "author_title_search", "author": "толстой", "title": "исповедь", "tier": "regression"},
