@@ -27,6 +27,8 @@
   {"query": "аркадий стругацкий", "kind": "author_search", "tier": "regression"},
   {"query": "Антон Чехов", "kind": "author_search", "tier": "regression"},
   {"query": "антон чехов", "kind": "author_search", "tier": "regression"},
+  {"query": "Фрэнк Герберт", "kind": "author_search", "tier": "regression"},
+  {"query": "фрэнк герберт", "kind": "author_search", "tier": "regression"},
 
   {"query": "Исповедь Толстой", "kind": "author_title_search", "author": "толстой", "title": "исповедь", "tier": "regression"},
   {"query": "исповедь толстой", "kind": "author_title_search", "author": "толстой", "title": "исповедь", "tier": "regression"},
@@ -42,7 +44,8 @@
   {"query": "Булгаков Мастер и Маргарита", "kind": "author_title_search", "author": "булгаков", "title": "мастер и маргарита", "tier": "regression"},
   {"query": "Мы Замятин", "kind": "author_title_search", "author": "замятин", "title": "мы", "tier": "regression"},
   {"query": "Оруэлл 1984", "kind": "author_title_search", "author": "оруэлл", "title": "1984", "tier": "regression"},
-  {"query": "Дюна Герберт", "kind": "author_title_search", "author": "герберт", "title": "дюна", "tier": "backlog", "note": "Фамилия автора ещё не распознаётся общей эвристикой"},
+  {"query": "Дюна Герберт", "kind": "author_title_search", "author": "герберт", "title": "дюна", "tier": "regression"},
+  {"query": "Герберт Дюна", "kind": "author_title_search", "author": "герберт", "title": "дюна", "tier": "regression"},
 
   {"query": "антиутопия", "kind": "recommendation", "topic_contains": ["антиутопия"], "tier": "regression"},
   {"query": "киберпанк", "kind": "recommendation", "topic_contains": ["киберпанк"], "tier": "regression"},

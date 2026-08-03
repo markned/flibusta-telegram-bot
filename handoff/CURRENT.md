@@ -140,3 +140,5 @@ Use `SMTP_PROVIDER=gmail`, host `smtp.gmail.com`, port `587`, STARTTLS true, and
 - raised the measured routing quality floor from 86% to 90%
 - recognized `Аркадий Стругацкий` and `Антон Чехов` as authors in both uppercase and lowercase input
 - raised the measured routing quality floor from 90% to 94%
+- recognized `Дюна Герберт` / `Герберт Дюна` as author+title searches while preserving `Фрэнк Герберт` as an author query
+- raised the measured routing quality floor from 94% to 96%
