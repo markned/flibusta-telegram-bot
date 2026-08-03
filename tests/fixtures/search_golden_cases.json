@@ -55,6 +55,6 @@
   {"query": "книга о попаданцах", "kind": "recommendation", "topic_contains": ["попаданцах"], "tier": "regression"},
   {"query": "что почитать как Пелевин", "kind": "discovery_optional", "topic_contains": ["пелевин"], "tier": "regression"},
   {"query": "подборка русского постмодерна", "kind": "discovery_optional", "topic_contains": ["русского", "постмодерна"], "tier": "regression"},
-  {"query": "немецкий постмодерн от первого лица", "kind": "recommendation", "topic_contains": ["немецкий", "постмодерн", "первого", "лица"], "tier": "backlog", "note": "Жанровая фраза ошибочно разбирается как автор и название"},
-  {"query": "книги как 1984", "kind": "recommendation", "topic_contains": ["1984"], "tier": "backlog", "note": "Паттерн похожести ещё не покрывает форму «книги как»"}
+  {"query": "немецкий постмодерн от первого лица", "kind": "discovery_optional", "topic_contains": ["немецкий", "постмодерн", "первого", "лица"], "tier": "regression"},
+  {"query": "книги как 1984", "kind": "recommendation", "topic_contains": ["1984"], "tier": "regression"}
 ]

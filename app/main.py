@@ -592,7 +592,9 @@ async def search_text(message: Message) -> None:
         return
     if decision.kind in {IntentKind.DISCOVERY_OPTIONAL, IntentKind.RECOMMENDATION}:
         if not settings.ai_enabled and not settings.discovery_enabled:
-            await send_smart_results(message, text)
+            await message.answer(
+                "Подборки по описанию сейчас отключены. Напиши название книги, автора или название и автора вместе."
+            )
             return
         if settings.recommendation_confirmation_required:
             await ask_recommendation_confirmation(message, text, decision)

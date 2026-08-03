@@ -12,7 +12,7 @@ from app.services.search_logic import norm
 CASES_PATH = Path(__file__).parent / "fixtures" / "search_golden_cases.json"
 CASES = json.loads(CASES_PATH.read_text(encoding="utf-8"))
 REGRESSION_CASES = [case for case in CASES if case["tier"] == "regression"]
-QUALITY_FLOOR = 0.96
+QUALITY_FLOOR = 1.0
 
 
 def _case_matches(case: dict[str, object]) -> bool:
@@ -53,4 +53,4 @@ def test_golden_dataset_has_balanced_coverage() -> None:
         "recommendation",
         "discovery_optional",
     } <= kinds
-    assert any(case["tier"] == "backlog" for case in CASES)
+    assert all(case["tier"] == "regression" for case in CASES)

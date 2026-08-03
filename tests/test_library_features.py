@@ -303,6 +303,18 @@ def test_exact_title_does_not_call_discovery_or_ai(monkeypatch):
  run(main.search_text(_FakeMessage('Подборка стихотворений')))
  assert calls==['smart']
 
+
+def test_disabled_assistant_does_not_run_literal_genre_search(monkeypatch):
+ import app.main as main
+ async def forbidden(*a,**kw): raise AssertionError('broad topic must not become literal catalog search')
+ monkeypatch.setattr(main.settings,'ai_enabled',False)
+ monkeypatch.setattr(main.settings,'discovery_enabled',False)
+ monkeypatch.setattr(main,'send_smart_results',forbidden)
+ msg=_FakeMessage('немецкий постмодерн от первого лица')
+ run(main.search_text(msg))
+ assert msg.answers
+ assert 'Подборки по описанию сейчас отключены' in msg.answers[-1][0]
+
 def test_admin_intent_is_admin_only_and_dry_run(monkeypatch):
  import app.main as main
  class Cmd: args='подборка хорошего русского постмодерна как Пелевин'
@@ -436,15 +448,15 @@ def test_disabled_literary_provider_returns_empty():
  assert run(DisabledLiterarySourceProvider().find_book_ideas('x',5))==[]
 
 
-def test_recommendation_falls_back_to_smart_when_assistant_disabled(monkeypatch):
+def test_recommendation_is_explained_when_assistant_disabled(monkeypatch):
  import app.main as main
- calls=[]
- async def smart(*a,**kw): calls.append('smart'); return True
+ async def smart(*a,**kw): raise AssertionError('genre query must not run as literal catalog search')
  monkeypatch.setattr(main.settings,'ai_enabled',False)
  monkeypatch.setattr(main.settings,'discovery_enabled',False)
  monkeypatch.setattr(main,'send_smart_results',smart)
- run(main.search_text(_FakeMessage('антиутопия')))
- assert calls==['smart']
+ msg=_FakeMessage('антиутопия')
+ run(main.search_text(msg))
+ assert 'Подборки по описанию сейчас отключены' in msg.answers[-1][0]
 
 def test_assistant_commands_hidden_when_disabled(monkeypatch):
  import app.main as main

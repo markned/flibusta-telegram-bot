@@ -11,8 +11,9 @@ class IntentKind(str, Enum):
 class IntentDecision:
     kind:IntentKind; confidence:float; original_query:str; cleaned_query:str; search_query:str|None; author_part:str|None; title_part:str|None; topic:str|None; reference_authors:list[str]; format_hint:str|None; reasons:list[str]
 
-INSTRUCTION_PATTERNS=(r'\bподбери\w*',r'\bпосовет\w*',r'\bпорекомендуй\w*',r'\bчто\s+почитать',r'\bхочу\s+почитать',r'\bчто-то\s+похож',r'\bпохож\w*\s+на',r'\bв\s+духе',r'\bподборка\s+\w',r'\bкниг[аи]?\s+(о|об|про)')
+INSTRUCTION_PATTERNS=(r'\bподбери\w*',r'\bпосовет\w*',r'\bпорекомендуй\w*',r'\bчто\s+почитать',r'\bхочу\s+почитать',r'\bчто-то\s+похож',r'\bпохож\w*\s+на',r'\bв\s+духе',r'\bподборка\s+\w',r'\bкниг[аи]?\s+(о|об|про|как)')
 GENRE_PHRASES=('антиутопия','киберпанк','постмодерн','попаданцы','литрпг','боярка','хоррор','ужасы','мрачное фэнтези','магический реализм')
+GENRE_STEMS=('антиутоп','киберпанк','постмодерн','попадан','литрпг','бояр','хоррор','ужас','фэнтези','магическ реализм')
 DISCOVERY_MARKERS=('лучшие','топ','новые','современные','популярные','неочевидные')
 DROP_WORDS=('подборка','подбери','посоветуй','порекомендуй','книга','книги','хорошего','хорошая','хорошую','литература','что почитать','что-то','пожалуйста')
 TITLE_CUES={'исповедь','дневник','идиот','дюна','мы'}
@@ -41,7 +42,7 @@ FIRST_NAMES={'эдит','лев','федор','фёдор','михаил','дж�
 
 def route_intent(query:str)->IntentDecision:
  a=analyze_query(query); cleaned=clean_query(a.cleaned or query); low=norm(cleaned); reasons=[]; topic=None; refs=_reference_authors(cleaned)
- recommendation=any(re.search(p,low,re.I) for p in INSTRUCTION_PATTERNS) or low in GENRE_PHRASES
+ recommendation=any(re.search(p,low,re.I) for p in INSTRUCTION_PATTERNS) or low in GENRE_PHRASES or any(stem in low for stem in GENRE_STEMS)
  # "Подборка стихотворений" is title-like, not instruction-like.
  if low.startswith('подборка ') and len(cleaned.split()) <= 3 and not any(x in low for x in ('как ','русск','хорош','лучшие','постмодерн')):
   recommendation=False; reasons.append('title_like_podborka')
