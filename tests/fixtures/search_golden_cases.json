@@ -10,10 +10,10 @@
   {"query": "Цветы для Элджернона", "kind": "exact_search", "tier": "regression"},
   {"query": "Мы", "kind": "exact_search", "tier": "regression"},
   {"query": "Игра в бисер", "kind": "exact_search", "tier": "regression"},
-  {"query": "Чапаев и Пустота", "kind": "exact_search", "tier": "backlog", "note": "Фамильное окончание в названии ошибочно запускает author+title"},
+  {"query": "Чапаев и Пустота", "kind": "exact_search", "tier": "regression"},
   {"query": "Парфюмер", "kind": "exact_search", "tier": "regression"},
   {"query": "Три товарища", "kind": "exact_search", "tier": "regression"},
-  {"query": "Норвежский лес", "kind": "exact_search", "tier": "backlog", "note": "Прилагательное ошибочно похоже на фамилию"},
+  {"query": "Норвежский лес", "kind": "exact_search", "tier": "regression"},
 
   {"query": "Эдит Патту", "kind": "author_search", "tier": "regression"},
   {"query": "Лев Толстой", "kind": "author_search", "tier": "regression"},

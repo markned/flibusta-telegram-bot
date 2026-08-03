@@ -79,7 +79,12 @@ def detect_author_title_query(query:str)->tuple[str,str]|None:
  if known:
   return known
  if _looks_surname(low[-1]): return words[-1], ' '.join(words[:-1])
- if _looks_surname(low[0]): return words[0], ' '.join(words[1:])
+ # A title often starts with an adjective or a character surname:
+ # "Норвежский лес", "Чапаев и Пустота". Generic surname suffixes are
+ # therefore too weak at the beginning of a query. Known author surnames
+ # still keep the fast author+title path; everything else safely falls back
+ # to the normal combined search.
+ if low[0] in KNOWN_SURNAMES: return words[0], ' '.join(words[1:])
  return None
 def _known_author_at_edge(words:list[str], low:list[str])->tuple[str,str]|None:
  for size in (3,2):

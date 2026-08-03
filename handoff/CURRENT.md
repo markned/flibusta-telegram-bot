@@ -136,3 +136,5 @@ Use `SMTP_PROVIDER=gmail`, host `smtp.gmail.com`, port `587`, STARTTLS true, and
 - regression cases now fail CI individually; documented backlog cases participate in the measured 86% baseline floor
 - `make search-quality` prints the current routing score and the exact known gaps without network access
 - `make test-search` now includes the resolver and golden search suite
+- fixed false author+title routing for title-like phrases beginning with surname-shaped words, including `Норвежский лес` and `Чапаев и Пустота`
+- raised the measured routing quality floor from 86% to 90%
