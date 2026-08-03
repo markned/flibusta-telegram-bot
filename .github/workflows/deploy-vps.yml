@@ -26,6 +26,7 @@ jobs:
             cd '${{ secrets.VPS_DEPLOY_PATH }}'
             git fetch origin
             git reset --hard origin/main
+            python3 deploy/normalize_env.py .env
             .venv/bin/pip install -r requirements.txt
             export SYSTEMD_PAGER=cat
             sudo -n /usr/bin/systemctl restart flibusta-tg-bot
