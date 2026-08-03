@@ -120,3 +120,13 @@ Use `SMTP_PROVIDER=gmail`, host `smtp.gmail.com`, port `587`, STARTTLS true, and
 - added deterministic title+author routing for `Восток Патту` / `восток патту` while keeping `Эдит Патту` as author search
 - added regression tests for partial Flibusta failures and natural title+author search filtering
 - tests: `make check` ✅ 122 passed
+
+## Current search + reader delivery release
+- combined Flibusta book/author lookup now runs in parallel and preserves partial success
+- natural smart search has one 12-second wall-clock budget and at most two bounded fallback queries
+- ranking now considers token coverage and lightweight title similarity; empty/transient search results are not persisted in cache
+- users see an editable `Ищу в библиотеке…` progress message instead of a silent wait
+- added generic SQLite reader destination storage and PocketBook `@pbsync.com` setup
+- Kindle and PocketBook share one SMTP sender, one queue, retry limits, history, EPUB metadata polishing and cover embedding
+- book cards now use `📤 На читалку`; users choose Kindle or PocketBook only when both are configured
+- legacy Kindle callbacks and hidden commands remain compatible

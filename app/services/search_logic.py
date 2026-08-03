@@ -1,4 +1,5 @@
 from __future__ import annotations
+from difflib import SequenceMatcher
 import re
 from app.flibusta import AuthorResult
 
@@ -13,14 +14,35 @@ def rank_and_dedupe_books(results:list,query:str)->list:
   key=(norm(base_title(item.title)),norm(item.author or '')); current=deduped.get(key)
   if current is None or book_score(item,q)>book_score(current,q): deduped[key]=item
  return sorted(deduped.values(),key=lambda item:book_score(item,q),reverse=True)
-def book_score(item,q:str)->tuple[int,int,int]:
- title=norm(base_title(item.title)); full=norm(item.title); return (int(title==q),int(title.startswith(q)),int(q in full))
+def book_score(item,q:str)->tuple[int,int,int,int,int,float]:
+ title=norm(base_title(item.title)); full=norm(item.title); author=norm(item.author or '')
+ q_tokens=set(q.split()); title_tokens=set(title.split()); combined_tokens=set(f'{title} {author}'.split())
+ title_coverage=_coverage(q_tokens,title_tokens); combined_coverage=_coverage(q_tokens,combined_tokens)
+ similarity=SequenceMatcher(None,q,title).ratio() if q and title else 0.0
+ return (
+  int(title==q),
+  int(title.startswith(q)),
+  int(q in full),
+  int(title_coverage==100),
+  combined_coverage,
+  similarity,
+ )
 def rank_authors(authors:list[AuthorResult],query:str)->list[AuthorResult]:
  q=norm(query); return sorted(authors,key=lambda item:(norm(item.name)==q,q in norm(item.name)),reverse=True)
 def fallback_queries(query:str)->list[str]:
  words=[w for w in re.split(r'\s+',query) if w]; candidates=[]
+ if len(words)>1:
+  candidates.extend((' '.join(words[:-1]),' '.join(words[1:])))
  for size in (4,3,2,1):
   if len(words)>=size:
    candidate=' '.join(words[:size])
-   if candidate!=query and candidate not in candidates:candidates.append(candidate)
- return candidates
+   if candidate!=query:candidates.append(candidate)
+ result=[]
+ for candidate in candidates:
+  candidate=candidate.strip()
+  if candidate and candidate!=query and candidate not in result: result.append(candidate)
+ return result
+
+def _coverage(expected:set[str],actual:set[str])->int:
+ if not expected:return 0
+ return round(100*len(expected & actual)/len(expected))

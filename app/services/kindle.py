@@ -11,6 +11,7 @@ from email_validator import EmailNotValidError, validate_email
 from app.flibusta import DownloadFormat, FlibustaClient, FlibustaError
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository
 from app.repositories.kindle_settings import KindleSettingsRepository
+from app.repositories.reader_settings import ReaderSettingsRepository
 from app.repositories.download_history import DownloadHistoryRepository
 from app.repositories.last_books import LastBooksRepository
 from app.services.conversion import ConversionNotAvailableError, ConversionService
@@ -60,6 +61,10 @@ class KindleFormatUnavailableError(KindleError):
     pass
 
 
+class ReaderSettingsMissingError(KindleSettingsMissingError):
+    pass
+
+
 # First-iteration compatibility aliases.
 MissingKindleSettingsError = KindleSettingsMissingError
 KindleEmailValidationError = KindleEmailInvalidError
@@ -74,6 +79,13 @@ class KindleSendResult:
     file_size_bytes: int
 
 
+@dataclass(frozen=True)
+class DeliverySettings:
+    destination_email: str
+    preferred_format: str
+    enabled: bool
+
+
 def validate_kindle_email(value: str) -> str:
     try:
         normalized = validate_email(value, check_deliverability=False).normalized
@@ -82,6 +94,16 @@ def validate_kindle_email(value: str) -> str:
     domain = normalized.rsplit("@", 1)[-1].lower()
     if domain not in {"kindle.com", "free.kindle.com"}:
         raise KindleEmailInvalidError("Use a Kindle address ending in @kindle.com or @free.kindle.com.")
+    return normalized
+
+
+def validate_pocketbook_email(value: str) -> str:
+    try:
+        normalized = validate_email(value, check_deliverability=False).normalized
+    except EmailNotValidError as exc:
+        raise KindleEmailInvalidError("Нужен корректный адрес PocketBook.") from exc
+    if normalized.rsplit("@", 1)[-1].lower() != "pbsync.com":
+        raise KindleEmailInvalidError("Адрес PocketBook должен заканчиваться на @pbsync.com.")
     return normalized
 
 
@@ -111,6 +133,19 @@ def choose_best_format(formats: Iterable[DownloadFormat], preferred: str | None)
     raise KindleFormatUnavailableError("No Kindle-compatible format is available for this book.")
 
 
+def choose_reader_format(formats: Iterable[DownloadFormat], preferred: str | None, provider: str) -> DownloadFormat:
+    by_code = {item.code: item for item in formats}
+    priority = (
+        [preferred, "epub", "fb2", "pdf", "txt", "mobi"]
+        if provider == "pocketbook"
+        else [preferred, "epub", "fb2", "txt", "mobi", "pdf"]
+    )
+    for code in priority:
+        if code and code in by_code:
+            return by_code[code]
+    raise KindleFormatUnavailableError("Для этой книги нет подходящего формата.")
+
+
 class KindleService:
     def __init__(
         self,
@@ -135,6 +170,7 @@ class KindleService:
         embed_cover_enabled: bool = True,
         filename_template: str = "{author} - {title}",
         strict_metadata_title_author: bool = True,
+        reader_settings_repo: ReaderSettingsRepository | None = None,
     ):
         self.flibusta = flibusta
         self.settings_repo = settings_repo
@@ -156,14 +192,21 @@ class KindleService:
         self.embed_cover_enabled = embed_cover_enabled
         self.filename_template = filename_template
         self.strict_metadata_title_author = strict_metadata_title_author
+        self.reader_settings_repo = reader_settings_repo
 
-    async def create_queued_delivery(self, user_id: int, book_id: str, retry_of_delivery_id: int | None = None) -> int:
-        settings = await self.settings_repo.get(user_id)
-        if settings is None or not settings.send_to_kindle_enabled:
-            raise KindleSettingsMissingError("Kindle e-mail is not configured.")
-        if await self.deliveries_repo.count_recent_for_user(user_id) >= self.send_rate_limit_per_hour:
+    async def create_queued_delivery(self, user_id: int, book_id: str, retry_of_delivery_id: int | None = None, provider: str = "kindle") -> int:
+        settings = await self._delivery_settings(user_id, provider)
+        if settings is None or not settings.enabled:
+            raise ReaderSettingsMissingError(f"{_provider_label(provider)} не настроен.")
+        if await self.deliveries_repo.count_recent_for_user(user_id, provider=provider) >= self.send_rate_limit_per_hour:
             raise KindleRateLimitError("Kindle send rate limit exceeded.")
-        return await self.deliveries_repo.create_delivery(user_id, book_id, status="queued", retry_of_delivery_id=retry_of_delivery_id)
+        return await self.deliveries_repo.create_delivery(
+            user_id,
+            book_id,
+            status="queued",
+            retry_of_delivery_id=retry_of_delivery_id,
+            provider=provider,
+        )
 
     async def process_delivery(
         self,
@@ -172,13 +215,14 @@ class KindleService:
         user_id: int,
         book_id: str,
         on_progress: ProgressCallback | None = None,
+        provider: str = "kindle",
     ) -> KindleSendResult:
-        settings = await self.settings_repo.get(user_id)
-        if settings is None or not settings.send_to_kindle_enabled:
-            raise KindleSettingsMissingError("Kindle e-mail is not configured.")
+        settings = await self._delivery_settings(user_id, provider)
+        if settings is None or not settings.enabled:
+            raise ReaderSettingsMissingError(f"{_provider_label(provider)} не настроен.")
         try:
             details = await self.flibusta.details(book_id)
-            target = choose_best_format(details.formats, settings.preferred_kindle_format or self.default_format)
+            target = choose_reader_format(details.formats, settings.preferred_format or self.default_format, provider)
             await self.deliveries_repo.update_status(
                 delivery_id,
                 "downloading",
@@ -258,9 +302,9 @@ class KindleService:
                 filename=filename,
                 file_size_bytes=len(content),
             )
-            await _progress(on_progress, "Sending to Kindle…")
+            await _progress(on_progress, f"Отправляю на {_provider_label(provider)}…")
             await self.email_sender.send_attachment(
-                to_email=settings.kindle_email,
+                to_email=settings.destination_email,
                 subject=details.title,
                 filename=filename,
                 content=content,
@@ -268,15 +312,36 @@ class KindleService:
             )
             await self.deliveries_repo.update_status(delivery_id, "sent")
             if self.download_history_repo:
-                await self.download_history_repo.add(user_id=user_id,book_id=book_id,title=details.title,author=", ".join(details.authors) or None,format=target_code,filename=filename,file_size_bytes=len(content),delivery_target="kindle",status="sent")
+                await self.download_history_repo.add(user_id=user_id,book_id=book_id,title=details.title,author=", ".join(details.authors) or None,format=target_code,filename=filename,file_size_bytes=len(content),delivery_target=provider,status="sent")
             if self.last_books_repo:
-                await self.last_books_repo.upsert(user_id,book_id,details.title,", ".join(details.authors) or None,"kindle_sent")
+                await self.last_books_repo.upsert(user_id,book_id,details.title,", ".join(details.authors) or None,f"{provider}_sent")
             return KindleSendResult(details.title, filename, target_code, len(content))
         except Exception as exc:
             await self.deliveries_repo.mark_failed(delivery_id, f"{classify_smtp_error(exc)}: {redact_sensitive_text(str(exc))}")
             if self.download_history_repo:
-                await self.download_history_repo.add(user_id=user_id,book_id=book_id,title=locals().get("details").title if locals().get("details") else None,author=", ".join(locals().get("details").authors) if locals().get("details") else None,format=locals().get("target_code", locals().get("target").code if locals().get("target") else self.default_format),filename=locals().get("filename"),file_size_bytes=len(locals().get("content", b"")) or None,delivery_target="kindle",status="failed",error=classify_smtp_error(exc))
+                await self.download_history_repo.add(user_id=user_id,book_id=book_id,title=locals().get("details").title if locals().get("details") else None,author=", ".join(locals().get("details").authors) if locals().get("details") else None,format=locals().get("target_code", locals().get("target").code if locals().get("target") else self.default_format),filename=locals().get("filename"),file_size_bytes=len(locals().get("content", b"")) or None,delivery_target=provider,status="failed",error=classify_smtp_error(exc))
             raise
+
+    async def _delivery_settings(self, user_id: int, provider: str) -> DeliverySettings | None:
+        if provider == "kindle":
+            settings = await self.settings_repo.get(user_id)
+            if settings is None:
+                return None
+            return DeliverySettings(
+                destination_email=settings.kindle_email,
+                preferred_format=settings.preferred_kindle_format,
+                enabled=settings.send_to_kindle_enabled,
+            )
+        if provider == "pocketbook" and self.reader_settings_repo is not None:
+            settings = await self.reader_settings_repo.get(user_id, provider)
+            if settings is None:
+                return None
+            return DeliverySettings(
+                destination_email=settings.destination_email,
+                preferred_format=settings.preferred_format,
+                enabled=settings.enabled,
+            )
+        return None
 
     def _kindle_filename(self, title: str, authors: list[str], fmt: str, *, fallback: str) -> str:
         suffix = f".{fmt.lower()}" if fmt else Path(fallback).suffix or ".epub"
@@ -303,3 +368,7 @@ async def _progress(callback: ProgressCallback | None, text: str) -> None:
 
 def redact_sensitive_text(value: str) -> str:
     return re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[email redacted]", value)
+
+
+def _provider_label(provider: str) -> str:
+    return "PocketBook" if provider == "pocketbook" else "Kindle"

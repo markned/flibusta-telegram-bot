@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import asyncio
 import logging
 import re
 import zipfile
@@ -119,23 +120,34 @@ class FlibustaClient:
 
         book_url = f"{self.base_url}/booksearch?ask={quote_plus(query)}&chb=on"
         author_url = f"{self.base_url}/booksearch?ask={quote_plus(query)}&cha=on"
+        book_result, author_result = await asyncio.gather(
+            self._get(book_url),
+            self._get(author_url),
+            return_exceptions=True,
+        )
         errors: list[FlibustaError] = []
         books: list[SearchResult] = []
         authors: list[AuthorResult] = []
 
-        try:
-            book_response = await self._get(book_url)
-            books = parse_search_results(book_response.text, limit=book_limit)
-        except FlibustaError as exc:
-            errors.append(exc)
+        if isinstance(book_result, Exception):
+            errors.append(
+                book_result
+                if isinstance(book_result, FlibustaError)
+                else FlibustaError("Не удалось подключиться к Flibusta.")
+            )
             logger.warning("Flibusta book search failed for combined search: %s", _safe_log_url(book_url))
+        else:
+            books = parse_search_results(book_result.text, limit=book_limit)
 
-        try:
-            author_response = await self._get(author_url)
-            authors = parse_author_results(author_response.text, limit=author_limit)
-        except FlibustaError as exc:
-            errors.append(exc)
+        if isinstance(author_result, Exception):
+            errors.append(
+                author_result
+                if isinstance(author_result, FlibustaError)
+                else FlibustaError("Не удалось подключиться к Flibusta.")
+            )
             logger.warning("Flibusta author search failed for combined search: %s", _safe_log_url(author_url))
+        else:
+            authors = parse_author_results(author_result.text, limit=author_limit)
 
         if errors and not books and not authors:
             raise errors[0]

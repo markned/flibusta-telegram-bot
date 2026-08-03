@@ -20,6 +20,7 @@ class KindleQueueJob:
     chat_id: int
     book_id: str
     status_message_id: int
+    provider: str = "kindle"
 
 
 class KindleQueue:
@@ -61,8 +62,8 @@ class KindleQueue:
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
 
-    async def enqueue(self, *, user_id: int, chat_id: int, book_id: str, status_message_id: int, retry_of_delivery_id: int | None = None) -> int:
-        delivery_id = await self.service.create_queued_delivery(user_id, book_id, retry_of_delivery_id=retry_of_delivery_id)
+    async def enqueue(self, *, user_id: int, chat_id: int, book_id: str, status_message_id: int, retry_of_delivery_id: int | None = None, provider: str = "kindle") -> int:
+        delivery_id = await self.service.create_queued_delivery(user_id, book_id, retry_of_delivery_id=retry_of_delivery_id, provider=provider)
         await self._queue.put(
             KindleQueueJob(
                 delivery_id=delivery_id,
@@ -70,6 +71,7 @@ class KindleQueue:
                 chat_id=chat_id,
                 book_id=book_id,
                 status_message_id=status_message_id,
+                provider=provider,
             )
         )
         return delivery_id
@@ -84,15 +86,16 @@ class KindleQueue:
                     for attempt in range(1,self.max_attempts+1):
                         await self.service.deliveries_repo.increment_attempt(job.delivery_id)
                         try:
-                            await self.service.process_delivery(delivery_id=job.delivery_id,user_id=job.user_id,book_id=job.book_id,on_progress=lambda text: self._edit_status(job,text))
-                            await self._edit_status(job,"Sent to Kindle. It usually appears in a few minutes."); break
+                            await self.service.process_delivery(delivery_id=job.delivery_id,user_id=job.user_id,book_id=job.book_id,on_progress=lambda text: self._edit_status(job,text),provider=job.provider)
+                            label = "PocketBook" if job.provider == "pocketbook" else "Kindle"
+                            await self._edit_status(job,f"Отправлено на {label}. Книга обычно появляется через несколько минут."); break
                         except Exception as exc:
                             cat=classify_smtp_error(exc)
                             if attempt < self.max_attempts and is_transient(cat):
-                                await self._edit_status(job,self.error_message_for_exception(exc))
+                                await self._edit_status(job,self._error_message(job, exc))
                                 await asyncio.sleep(self.retry_base_delay_seconds*(3**(attempt-1))); continue
                             logger.error("Kindle queue job failed user_id=%s book_id=%s error_type=%s",job.user_id,job.book_id,type(exc).__name__)
-                            await self._edit_status(job,self.error_message_for_exception(exc)); break
+                            await self._edit_status(job,self._error_message(job, exc)); break
                 finally:
                     self.active_jobs -= 1
                     self._queue.task_done()
@@ -104,3 +107,9 @@ class KindleQueue:
             await self._bot.edit_message_text(text,chat_id=job.chat_id,message_id=job.status_message_id)
         except Exception as exc:
             logger.warning("Kindle status edit failed error_type=%s",type(exc).__name__)
+
+    def _error_message(self, job: KindleQueueJob, exc: Exception) -> str:
+        message = self.error_message_for_exception(exc)
+        if job.provider == "pocketbook":
+            return message.replace("Kindle", "PocketBook").replace("kindle", "PocketBook")
+        return message

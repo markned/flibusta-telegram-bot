@@ -23,21 +23,22 @@ class KindleDelivery:
     attempts: int = 0
     last_error: str | None = None
     last_attempt_at: str | None = None
+    provider: str = "kindle"
 
 
 class KindleDeliveriesRepository:
     def __init__(self, db: Database):
         self.db = db
 
-    async def create_delivery(self, user_id: int, book_id: str, status: str = "queued", retry_of_delivery_id: int | None = None) -> int:
+    async def create_delivery(self, user_id: int, book_id: str, status: str = "queued", retry_of_delivery_id: int | None = None, provider: str = "kindle") -> int:
         now = _now()
         async with self.db.connect() as conn:
             cursor = await conn.execute(
                 """
-                INSERT INTO kindle_deliveries (user_id, book_id, status, created_at, updated_at, retry_of_delivery_id)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO kindle_deliveries (user_id, book_id, status, created_at, updated_at, retry_of_delivery_id, provider)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, book_id, status, now, now, retry_of_delivery_id),
+                (user_id, book_id, status, now, now, retry_of_delivery_id, provider),
             )
             await conn.commit()
             return int(cursor.lastrowid)
@@ -80,8 +81,13 @@ class KindleDeliveriesRepository:
     async def get_by_id(self, delivery_id:int):
         async with self.db.connect() as c: row=await (await c.execute("SELECT * FROM kindle_deliveries WHERE id=?",(delivery_id,))).fetchone()
         return None if row is None else _delivery_from_row(row)
-    async def get_latest_failed_for_user(self,user_id:int):
-        async with self.db.connect() as c: row=await (await c.execute("SELECT * FROM kindle_deliveries WHERE user_id=? AND status='failed' ORDER BY created_at DESC,id DESC LIMIT 1",(user_id,))).fetchone()
+    async def get_latest_failed_for_user(self,user_id:int,provider:str|None=None):
+        sql="SELECT * FROM kindle_deliveries WHERE user_id=? AND status='failed'"
+        params:list=[user_id]
+        if provider:
+            sql+=" AND provider=?"; params.append(provider)
+        sql+=" ORDER BY created_at DESC,id DESC LIMIT 1"
+        async with self.db.connect() as c: row=await (await c.execute(sql,tuple(params))).fetchone()
         return None if row is None else _delivery_from_row(row)
     async def get_recent_failures(self,limit=10):
         async with self.db.connect() as c: rows=await (await c.execute("SELECT * FROM kindle_deliveries WHERE status='failed' ORDER BY created_at DESC LIMIT ?",(limit,))).fetchall()
@@ -91,37 +97,33 @@ class KindleDeliveriesRepository:
         async with self.db.connect() as c:
             cur=await c.execute("DELETE FROM kindle_deliveries WHERE status IN ('sent','failed') AND created_at < ?",(since,)); await c.commit(); return cur.rowcount
 
-    async def get_recent_for_user(self, user_id: int, limit: int = 10) -> list[KindleDelivery]:
+    async def get_recent_for_user(self, user_id: int, limit: int = 10, provider: str | None = None) -> list[KindleDelivery]:
         async with self.db.connect() as conn:
-            rows = await (
-                await conn.execute(
-                    """
-                    SELECT *
-                    FROM kindle_deliveries
-                    WHERE user_id = ?
-                    ORDER BY created_at DESC, id DESC
-                    LIMIT ?
-                    """,
+            if provider:
+                rows = await (await conn.execute(
+                    "SELECT * FROM kindle_deliveries WHERE user_id = ? AND provider = ? ORDER BY created_at DESC, id DESC LIMIT ?",
+                    (user_id, provider, limit),
+                )).fetchall()
+            else:
+                rows = await (await conn.execute(
+                    "SELECT * FROM kindle_deliveries WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?",
                     (user_id, limit),
-                )
-            ).fetchall()
+                )).fetchall()
         return [_delivery_from_row(row) for row in rows]
 
-    async def count_recent_for_user(self, user_id: int, hours: int = 1) -> int:
+    async def count_recent_for_user(self, user_id: int, hours: int = 1, provider: str | None = None) -> int:
         since = (datetime.now(UTC) - timedelta(hours=hours)).isoformat()
         async with self.db.connect() as conn:
-            row = await (
-                await conn.execute(
-                    """
-                    SELECT COUNT(*) AS count
-                    FROM kindle_deliveries
-                    WHERE user_id = ?
-                      AND created_at >= ?
-                      AND status IN ('queued', 'downloading', 'downloaded', 'converting', 'sending', 'sent', 'failed')
-                    """,
-                    (user_id, since),
-                )
-            ).fetchone()
+            sql = """
+                SELECT COUNT(*) AS count FROM kindle_deliveries
+                WHERE user_id = ? AND created_at >= ?
+                  AND status IN ('queued', 'downloading', 'downloaded', 'converting', 'sending', 'sent', 'failed')
+            """
+            params: tuple = (user_id, since)
+            if provider:
+                sql += " AND provider = ?"
+                params += (provider,)
+            row = await (await conn.execute(sql, params)).fetchone()
         return int(row["count"])
 
     async def count_recent_failures(self, hours: int = 24) -> int:

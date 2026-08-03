@@ -177,7 +177,7 @@ def build_kindle_router(
 
     @router.message(Command("kindle_history"))
     async def kindle_history(message: Message) -> None:
-        items = await deliveries_repo.get_recent_for_user(message.from_user.id, limit=10)
+        items = await deliveries_repo.get_recent_for_user(message.from_user.id, limit=10, provider="kindle")
         if not items:
             await message.answer("Отправок на Kindle пока не было.")
             return
@@ -189,9 +189,9 @@ def build_kindle_router(
         old = await (
             deliveries_repo.get_by_id(int(arg))
             if arg.isdigit()
-            else deliveries_repo.get_latest_failed_for_user(message.from_user.id)
+            else deliveries_repo.get_latest_failed_for_user(message.from_user.id, provider="kindle")
         )
-        if old is None or old.user_id != message.from_user.id:
+        if old is None or old.user_id != message.from_user.id or old.provider != "kindle":
             await message.answer("Не нашёл неудачную отправку для повтора.")
             return
         if old.status != "failed":
@@ -290,7 +290,7 @@ def build_kindle_router(
         out = []
         for r in rows:
             ks = await settings_repo.get(r["user_id"])
-            deliveries = await deliveries_repo.get_recent_for_user(r["user_id"], limit=100000)
+            deliveries = await deliveries_repo.get_recent_for_user(r["user_id"], limit=100000, provider="kindle")
             out.append(
                 {
                     "user_id": r["user_id"],
@@ -370,7 +370,7 @@ def build_kindle_router(
     @router.callback_query(F.data == "kindle_history_home")
     async def history_cb(callback: CallbackQuery) -> None:
         await callback.answer()
-        items = await deliveries_repo.get_recent_for_user(callback.from_user.id, limit=10)
+        items = await deliveries_repo.get_recent_for_user(callback.from_user.id, limit=10, provider="kindle")
         await callback.message.answer(format_history(items) if items else "Отправок на Kindle пока не было.")
 
     @router.callback_query(F.data == "kindle_format_menu")

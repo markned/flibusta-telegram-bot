@@ -42,6 +42,21 @@ CREATE TABLE IF NOT EXISTS invite_uses (id INTEGER PRIMARY KEY AUTOINCREMENT, co
 (6,'006_add_kindle_sender_confirmation','''
 ALTER TABLE user_kindle_settings ADD COLUMN approved_sender_confirmed INTEGER DEFAULT 0;
 '''),
+(7,'007_add_reader_destinations','''
+CREATE TABLE IF NOT EXISTS user_reader_settings (
+    user_id INTEGER NOT NULL,
+    provider TEXT NOT NULL,
+    destination_email TEXT NOT NULL,
+    preferred_format TEXT NOT NULL DEFAULT 'epub',
+    enabled INTEGER NOT NULL DEFAULT 1,
+    sender_confirmed INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, provider)
+);
+CREATE INDEX IF NOT EXISTS idx_user_reader_settings_provider_user ON user_reader_settings(provider, user_id);
+ALTER TABLE kindle_deliveries ADD COLUMN provider TEXT NOT NULL DEFAULT 'kindle';
+'''),
 ]
 async def run_migrations(conn):
  await conn.execute('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)')

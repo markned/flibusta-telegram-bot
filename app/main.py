@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from asyncio import sleep
+from asyncio import sleep, timeout
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -34,11 +34,13 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from app.config import Settings
 from app.flibusta import AuthorResult, FlibustaClient, FlibustaError, SearchResult
 from app.handlers.kindle import build_kindle_router, user_message_for_exception
+from app.handlers.readers import build_readers_router
 from app.handlers.admin import build_admin_router
 from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
 from app.repositories.db import Database
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository
 from app.repositories.kindle_settings import KindleSettingsRepository
+from app.repositories.reader_settings import ReaderSettingsRepository
 from app.repositories.user_preferences import UserPreferencesRepository
 from app.repositories.cache import CacheRepository
 from app.repositories.favorites import FavoritesRepository
@@ -86,6 +88,7 @@ from app.services.search_logic import (
     rank_and_dedupe_books as _rank_and_dedupe_books,
     rank_authors as _rank_authors,
 )
+from app.services.search_resolver import resolve_search
 from app.ui.library import (
     author_results_keyboard as _author_results_keyboard,
     author_results_text as _author_results_text,
@@ -122,6 +125,7 @@ FAVORITES_BUTTON = "⭐ Избранное"
 HISTORY_BUTTON = "🕘 История"
 LAST_BUTTON = "📚 Последняя"
 KINDLE_BUTTON = "⚙️ Kindle"
+READERS_BUTTON = "📱 Читалки"
 HELP_BUTTON = "❓ Помощь"
 
 router = Router()
@@ -173,6 +177,7 @@ flibusta = CachedFlibustaClient(raw_flibusta, cache_repo, enabled=settings.cache
     "author_books": settings.cache_author_books_ttl_seconds,
 })
 kindle_settings_repo = KindleSettingsRepository(db)
+reader_settings_repo = ReaderSettingsRepository(db)
 kindle_deliveries_repo = KindleDeliveriesRepository(db)
 user_preferences_repo = UserPreferencesRepository(db)
 email_sender = EmailSender(
@@ -205,6 +210,7 @@ kindle_service = KindleService(
     embed_cover_enabled=settings.kindle_embed_cover_enabled,
     filename_template=settings.kindle_filename_template,
     strict_metadata_title_author=settings.kindle_strict_metadata_title_author,
+    reader_settings_repo=reader_settings_repo,
 )
 kindle_queue = KindleQueue(
     service=kindle_service,
@@ -566,8 +572,8 @@ async def search_text(message: Message) -> None:
         await history_command(message); return
     if text == LAST_BUTTON:
         await last_command(message); return
-    if text == KINDLE_BUTTON:
-        await message.answer("Открываю Kindle-меню.", reply_markup=back_home_keyboard())
+    if text in {KINDLE_BUTTON, READERS_BUTTON}:
+        await message.answer("Открываю меню читалок.", reply_markup=back_home_keyboard())
         return
     if text == HELP_BUTTON:
         await send_help(message)
@@ -581,7 +587,8 @@ async def search_text(message: Message) -> None:
         await send_smart_results(message, text)
         return
     if decision.kind == IntentKind.AUTHOR_SEARCH:
-        await send_author_results(message, decision.search_query or text)
+        if not await send_author_results(message, decision.search_query or text, show_no_results=False):
+            await send_smart_results(message, text)
         return
     if decision.kind in {IntentKind.DISCOVERY_OPTIONAL, IntentKind.RECOMMENDATION}:
         if not settings.ai_enabled and not settings.discovery_enabled:
@@ -1239,17 +1246,25 @@ async def send_search_results(message: Message, query: str) -> None:
 
 async def send_author_title_results(message: Message, author: str, title: str) -> bool:
     """Fast path for obvious 'author + title' queries like 'Лев Толстой исповедь'."""
+    progress = await telegram_retry(lambda: message.answer("🔎 Ищу книгу и проверяю автора…"), attempts=2)
     try:
-        results = _rank_and_dedupe_books(
-            await flibusta.search(_clean_query(title), limit=settings.search_results_limit),
-            title,
-        )
-    except FlibustaError:
+        async with timeout(settings.search_total_timeout_seconds):
+            results = _rank_and_dedupe_books(
+                await flibusta.search(_clean_query(title), limit=settings.search_results_limit),
+                title,
+            )
+            matched = _filter_author_title_results(results, author)
+            if not matched:
+                matched = await _search_author_books_for_title(author, title)
+    except (FlibustaError, TimeoutError):
+        if progress is not None:
+            try: await progress.delete()
+            except Exception: pass
         return False
-    matched = _filter_author_title_results(results, author)
     if not matched:
-        matched = await _search_author_books_for_title(author, title)
-    if not matched:
+        if progress is not None:
+            try: await progress.delete()
+            except Exception: pass
         return False
     session = _create_search_session(
         message.from_user.id,
@@ -1258,7 +1273,7 @@ async def send_author_title_results(message: Message, author: str, title: str) -
         matched,
         title=f"<b>Книги</b>\nПо запросу: <b>{escape(author)} {escape(title)}</b>",
     )
-    await message.answer(_search_results_text(session), reply_markup=_search_results_keyboard(session))
+    await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
     return True
 
 async def send_reversed_author_title_results(message: Message, query: str) -> bool:
@@ -1314,11 +1329,12 @@ async def _search_author_books_for_title(author: str, title: str) -> list[Search
     return []
 
 
-async def send_author_results(message: Message, query: str) -> None:
+async def send_author_results(message: Message, query: str, *, show_no_results: bool = True) -> bool:
     if not _allow_search(message.from_user.id):
         await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
-        return
+        return False
     started_at = monotonic()
+    progress = await telegram_retry(lambda: message.answer("🔎 Ищу автора…"), attempts=2)
     log_user_action(message.from_user, message.chat.id, "author_search_start", query=query)
     try:
         await telegram_retry(
@@ -1329,11 +1345,12 @@ async def send_author_results(message: Message, query: str) -> None:
         logger.warning("Could not send typing action")
 
     try:
-        authors = _rank_authors(
-            await flibusta.search_authors(_clean_query(query), limit=settings.search_results_limit),
-            query,
-        )
-    except FlibustaError as exc:
+        async with timeout(settings.search_total_timeout_seconds):
+            authors = _rank_authors(
+                await flibusta.search_authors(_clean_query(query), limit=settings.search_results_limit),
+                query,
+            )
+    except (FlibustaError, TimeoutError) as exc:
         log_user_action(
             message.from_user,
             message.chat.id,
@@ -1342,8 +1359,13 @@ async def send_author_results(message: Message, query: str) -> None:
             error=str(exc),
             duration=elapsed(started_at),
         )
-        await telegram_retry(lambda: message.answer(str(exc)))
-        return
+        if show_no_results:
+            text = str(exc) if isinstance(exc, FlibustaError) else "Поиск автора занял слишком много времени. Попробуй ещё раз позже."
+            await _send_or_edit(message, progress, text)
+        elif progress is not None:
+            try: await progress.delete()
+            except Exception: pass
+        return False
 
     if not authors:
         log_user_action(
@@ -1353,8 +1375,12 @@ async def send_author_results(message: Message, query: str) -> None:
             query=query,
             duration=elapsed(started_at),
         )
-        await _send_no_results(message, query)
-        return
+        if show_no_results:
+            await _send_no_results(message, query, progress=progress)
+        elif progress is not None:
+            try: await progress.delete()
+            except Exception: pass
+        return False
 
     session = _create_author_session(message.from_user.id, message.chat.id, query, authors)
     log_user_action(
@@ -1366,12 +1392,13 @@ async def send_author_results(message: Message, query: str) -> None:
         pages=total_pages(len(authors)),
         duration=elapsed(started_at),
     )
-    await telegram_retry(
-        lambda: message.answer(
-            _author_results_text(session),
-            reply_markup=_author_results_keyboard(session),
-        )
+    await _send_or_edit(
+        message,
+        progress,
+        _author_results_text(session),
+        reply_markup=_author_results_keyboard(session),
     )
+    return True
 
 
 async def send_smart_results(message: Message, query: str, *, show_no_results: bool = True) -> bool:
@@ -1384,27 +1411,22 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
     if analysis.format_hint:
         await _remember_preferred_format(message.from_user.id, analysis.format_hint)
     log_user_action(message.from_user, message.chat.id, "smart_search_start", query=query)
+    progress = await telegram_retry(lambda: message.answer("🔎 Ищу в библиотеке…"), attempts=2)
     try:
         await telegram_retry(
             lambda: message.bot.send_chat_action(message.chat.id, ChatAction.TYPING),
             attempts=2,
         )
-        used_query = cleaned
-        raw_books, raw_authors = await flibusta.search_all(
+        resolution = await resolve_search(
+            flibusta,
             cleaned,
             book_limit=settings.search_results_limit,
             author_limit=settings.search_results_limit,
+            timeout_seconds=settings.search_total_timeout_seconds,
+            max_fallback_queries=settings.search_fallback_max_queries,
         )
-        if not raw_books and not raw_authors:
-            for fallback_query in _fallback_queries(cleaned):
-                raw_books, raw_authors = await flibusta.search_all(
-                    fallback_query,
-                    book_limit=settings.search_results_limit,
-                    author_limit=settings.search_results_limit,
-                )
-                if raw_books or raw_authors:
-                    used_query = fallback_query
-                    break
+        used_query = resolution.used_query
+        raw_books, raw_authors = resolution.books, resolution.authors
     except FlibustaError as exc:
         log_user_action(
             message.from_user,
@@ -1414,7 +1436,15 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
             error=str(exc),
             duration=elapsed(started_at),
         )
-        await telegram_retry(lambda: message.answer(str(exc)))
+        await _send_or_edit(message, progress, str(exc))
+        return False
+    except TimeoutError:
+        logger.warning("smart search deadline exceeded user_id=%s query_len=%s", message.from_user.id, len(query))
+        await _send_or_edit(
+            message,
+            progress,
+            "Поиск занял слишком много времени. Flibusta сейчас отвечает медленно — попробуй ещё раз через минуту.",
+        )
         return False
 
     books = _rank_and_dedupe_books(raw_books, query)
@@ -1433,18 +1463,18 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
             books=len(books),
             duration=elapsed(started_at),
         )
-        await telegram_retry(
-            lambda: message.answer(
-                f"Похоже, это автор. Нашёл по запросу: <b>{escape(used_query)}</b>",
-                reply_markup=_author_results_keyboard(session),
-            )
+        await _send_or_edit(
+            message,
+            progress,
+            f"Похоже, это автор. Нашёл по запросу: <b>{escape(used_query)}</b>",
+            reply_markup=_author_results_keyboard(session),
         )
         return True
 
     if books and authors and not top_book_is_exact and not top_author_is_exact and not analysis.quoted_title:
         book_session = _create_search_session(message.from_user.id, message.chat.id, used_query, books)
         author_session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
-        await telegram_retry(lambda: message.answer(_combined_results_text(used_query, books, authors), reply_markup=_combined_results_keyboard(book_session, author_session)))
+        await _send_or_edit(message, progress, _combined_results_text(used_query, books, authors), reply_markup=_combined_results_keyboard(book_session, author_session))
         return True
 
     if books:
@@ -1461,26 +1491,31 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
             authors=len(authors),
             duration=elapsed(started_at),
         )
-        await telegram_retry(
-            lambda: message.answer(
-                _search_results_text(session),
-                reply_markup=_search_results_keyboard(session),
-            )
+        await _send_or_edit(
+            message,
+            progress,
+            _search_results_text(session),
+            reply_markup=_search_results_keyboard(session),
         )
         return True
 
     if authors:
         session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
-        await telegram_retry(
-            lambda: message.answer(
-                f"Книг не нашёл, но нашёл авторов по запросу: <b>{escape(used_query)}</b>",
-                reply_markup=_author_results_keyboard(session),
-            )
+        await _send_or_edit(
+            message,
+            progress,
+            f"Книг не нашёл, но нашёл авторов по запросу: <b>{escape(used_query)}</b>",
+            reply_markup=_author_results_keyboard(session),
         )
         return True
 
     if show_no_results:
-        await _send_no_results(message, query)
+        await _send_no_results(message, query, progress=progress)
+    elif progress is not None:
+        try:
+            await progress.delete()
+        except Exception:
+            pass
     return False
 
 async def send_discovery_results(message: Message, query: str, *, mode: str, use_web: bool) -> bool:
@@ -1747,13 +1782,18 @@ def _allow_search(user_id: int) -> bool:
         return False
     items.append(time()); search_timestamps[user_id] = items; return True
 
-async def _send_no_results(message: Message, query: str) -> None:
+async def _send_no_results(message: Message, query: str, *, progress: Message | None = None) -> None:
     sid=uuid4().hex[:10]; retry_sessions[sid]=query; _prune_sessions(retry_sessions)
     kb=InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Искать короче",callback_data=f"retry_short:{sid}"))
     kb.row(InlineKeyboardButton(text="Искать как книгу",callback_data=f"retry_book:{sid}"),InlineKeyboardButton(text="Искать как автора",callback_data=f"retry_author:{sid}"))
     kb.row(InlineKeyboardButton(text="🏠 В меню",callback_data="home"))
-    await telegram_retry(lambda: message.answer(f"<b>Ничего не нашёл</b>\nЗапрос: <b>{escape(query)}</b>\n\nМожно попробовать короче или искать как автора.",reply_markup=kb.as_markup()))
+    await _send_or_edit(
+        message,
+        progress,
+        f"<b>Ничего не нашёл</b>\nЗапрос: <b>{escape(query)}</b>\n\nМожно попробовать короче или искать как автора.",
+        reply_markup=kb.as_markup(),
+    )
 
 def _dedupe_books_preserving_order(items):
     seen=set(); result=[]
@@ -1811,6 +1851,20 @@ async def _edit_progress(message: Message, text: str) -> None:
         await telegram_retry(lambda: message.edit_text(text), attempts=2)
     except Exception:
         logger.debug("Could not edit AI progress message", exc_info=True)
+
+
+async def _send_or_edit(message: Message, progress, text: str, *, reply_markup=None) -> None:
+    if progress is not None and hasattr(progress, "edit_text"):
+        try:
+            edited = await telegram_retry(
+                lambda: progress.edit_text(text, reply_markup=reply_markup),
+                attempts=2,
+            )
+            if edited is not None:
+                return
+        except Exception:
+            logger.debug("Could not replace search progress message", exc_info=True)
+    await telegram_retry(lambda: message.answer(text, reply_markup=reply_markup))
 
 async def _send_favorites_page(message: Message, user_id: int, page: int, edit: bool=False):
     items=await favorites_repo.list(user_id,limit=8,offset=page*8); count=await favorites_repo.count(user_id)
@@ -1910,6 +1964,17 @@ async def main() -> None:
     if settings.access_control_enabled:
         dispatcher.message.middleware(AccessMiddleware(access_repo, settings.admin_ids))
         dispatcher.callback_query.middleware(AccessMiddleware(access_repo, settings.admin_ids))
+    dispatcher.include_router(
+        build_readers_router(
+            kindle_settings_repo=kindle_settings_repo,
+            reader_settings_repo=reader_settings_repo,
+            deliveries_repo=kindle_deliveries_repo,
+            delivery_queue=kindle_queue,
+            email_sender=email_sender,
+            smtp_from_email=settings.smtp_from_email,
+            smtp_config_present=settings.smtp_config_present,
+        )
+    )
     dispatcher.include_router(
         build_kindle_router(
             db=db,

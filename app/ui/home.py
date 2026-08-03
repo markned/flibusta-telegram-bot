@@ -26,7 +26,7 @@ def home_keyboard():
     )
     kb.row(
         InlineKeyboardButton(text="📚 Последняя книга", callback_data="home_last"),
-        InlineKeyboardButton(text="⚙️ Kindle", callback_data="kindle_home"),
+        InlineKeyboardButton(text="📱 Читалки", callback_data="readers_home"),
     )
     kb.row(InlineKeyboardButton(text="❓ Помощь", callback_data="home_help"))
     return kb.as_markup()
@@ -47,14 +47,14 @@ def help_text() -> str:
         "• подборка русского постмодерна как Пелевин\n\n"
         "В карточке книги можно:\n"
         "• скачать файл\n"
-        "• отправить на Kindle\n"
+        "• отправить на Kindle или PocketBook\n"
         "• добавить в избранное"
     )
 
 
 def help_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="⚙️ Kindle", callback_data="kindle_home"))
+    kb.row(InlineKeyboardButton(text="📱 Читалки", callback_data="readers_home"))
     kb.row(InlineKeyboardButton(text="⭐ Избранное", callback_data="home_favorites"))
     kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
     return kb.as_markup()

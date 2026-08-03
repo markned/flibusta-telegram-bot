@@ -78,14 +78,14 @@ def book_text(details:BookDetails,annotation_max_chars:int,full_annotation:bool=
   if not full_annotation and len(text)>annotation_max_chars: text=text[:annotation_max_chars-1].rstrip()+'…'
   parts.append(escape(text))
  if not details.formats: parts.append('Доступные форматы не найдены.')
- elif not any(i.code in {'epub','fb2','txt','mobi','pdf'} for i in details.formats): parts.append('Kindle-совместимый формат не найден.')
+ elif not any(i.code in {'epub','fb2','txt','mobi','pdf'} for i in details.formats): parts.append('Подходящий для читалки формат не найден.')
  return '\n\n'.join(parts)
 def formats_keyboard(details:BookDetails,preferred_format:str|None,is_favorite:bool,annotation_max_chars:int):
  author_buttons=[i for i in details.author_refs[:2] if i.author_id]
  if not details.formats and not author_buttons:return None
  kb=InlineKeyboardBuilder()
- kindle=next((c for c in [preferred_format,'epub','fb2','txt','mobi','pdf'] if c and any(f.code==c for f in details.formats)),None)
- if kindle: kb.row(InlineKeyboardButton(text=f'📤 Kindle {kindle.upper()}',callback_data=f'kindle:{details.book_id}'))
+ reader_format=next((c for c in [preferred_format,'epub','fb2','txt','mobi','pdf'] if c and any(f.code==c for f in details.formats)),None)
+ if reader_format: kb.row(InlineKeyboardButton(text='📤 На читалку',callback_data=f'reader_send:{details.book_id}'))
  ordered=sorted(details.formats,key=lambda i:(i.code!=preferred_format, i.code not in {'epub','fb2','txt','pdf','mobi'}, i.code))
  row=[]
  for item in ordered:
@@ -98,7 +98,7 @@ def formats_keyboard(details:BookDetails,preferred_format:str|None,is_favorite:b
  if details.annotation and len(details.annotation)>annotation_max_chars: kb.row(InlineKeyboardButton(text='📖 Описание полностью',callback_data=f'annotation:{details.book_id}'))
  return kb.as_markup()
 def main_reply_keyboard():
- return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='⭐ Избранное'),KeyboardButton(text='🕘 История')],[KeyboardButton(text='📚 Последняя'),KeyboardButton(text='⚙️ Kindle')],[KeyboardButton(text='❓ Помощь')]],resize_keyboard=True,is_persistent=True,input_field_placeholder='Книга, автор или что хочется почитать')
+ return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='⭐ Избранное'),KeyboardButton(text='🕘 История')],[KeyboardButton(text='📚 Последняя'),KeyboardButton(text='📱 Читалки')],[KeyboardButton(text='❓ Помощь')]],resize_keyboard=True,is_persistent=True,input_field_placeholder='Книга, автор или что хочется почитать')
 def history_text(items:list[DownloadHistoryItem],failed:bool=False)->str:
  if not items:return '<b>Неудачные отправки</b>\n\nПока пусто.' if failed else '<b>История</b>\n\nПока пусто.'
  lines=['<b>Неудачные отправки</b>' if failed else '<b>История</b>']

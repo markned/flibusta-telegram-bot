@@ -43,6 +43,16 @@ def test_cached_client_uses_cached_search(tmp_path:Path):
  db=Database(str(tmp_path/'db.sqlite')); run(db.initialize()); raw=CountingFlibusta(); cached=CachedFlibustaClient(raw,CacheRepository(db),enabled=True,ttls={'book_search':60})
  assert run(cached.search('Book'))[0].title=='Book'; assert run(cached.search('Book'))[0].title=='Book'; assert raw.calls==1
 
+def test_cached_client_does_not_persist_empty_search(tmp_path:Path):
+ class EmptyFlibusta:
+  def __init__(self): self.calls=0
+  async def search(self,q,limit=8): self.calls+=1; return []
+  async def close(self): pass
+ db=Database(str(tmp_path/'db.sqlite')); run(db.initialize()); raw=EmptyFlibusta()
+ cached=CachedFlibustaClient(raw,CacheRepository(db),enabled=True,ttls={'book_search':60})
+ assert run(cached.search('Missing'))==[]; assert run(cached.search('missing'))==[]
+ assert raw.calls==2
+
 def test_access_invite_and_approval(tmp_path:Path):
  from app.repositories.access import AccessRepository
  db=Database(str(tmp_path/'db.sqlite')); run(db.initialize()); repo=AccessRepository(db)
@@ -180,10 +190,10 @@ class _FakeBot:
  async def send_chat_action(self,*a,**kw): return None
 class _FakeMessage:
  def __init__(self,text=''):
-  self.text=text; self.from_user=_FakeUser(); self.chat=_FakeChat(); self.bot=_FakeBot(); self.answers=[]; self.photos=[]; self.edits=[]
+  self.text=text; self.from_user=_FakeUser(); self.chat=_FakeChat(); self.bot=_FakeBot(); self.answers=[]; self.photos=[]; self.edits=[]; self.edit_payloads=[]
  async def answer(self,text,*a,**kw): self.answers.append((text,kw)); return self
  async def answer_photo(self,photo,*a,**kw): self.photos.append((photo,kw)); return self
- async def edit_text(self,text,*a,**kw): self.edits.append(text); return self
+ async def edit_text(self,text,*a,**kw): self.edits.append(text); self.edit_payloads.append((text,kw)); return self
 
 def test_send_search_results_sends_message(monkeypatch):
  import app.main as main
@@ -197,7 +207,7 @@ def test_send_search_results_sends_message(monkeypatch):
 def test_text_routing_author_uses_author_not_ai(monkeypatch):
  import app.main as main
  calls=[]
- async def author(*a,**kw): calls.append('author')
+ async def author(*a,**kw): calls.append('author'); return True
  async def smart(*a,**kw): calls.append('smart'); return True
  async def ai(*a,**kw): calls.append('ai')
  monkeypatch.setattr(main,'send_author_results',author); monkeypatch.setattr(main,'send_smart_results',smart); monkeypatch.setattr(main,'send_ai_results',ai)
@@ -213,7 +223,7 @@ def test_reversed_author_title_search_finds_title(monkeypatch):
  monkeypatch.setattr(main,'flibusta',Flib())
  msg=_FakeMessage()
  assert run(main.send_reversed_author_title_results(msg,'Исповедь Толстой')) is True
- assert any('Исповедь' in text for text,_ in msg.answers)
+ assert any('Исповедь' in text for text,_ in msg.answers) or any('Исповедь' in text for text in msg.edits)
 
 def test_ai_exception_falls_back_to_smart(monkeypatch):
  import app.main as main
@@ -327,7 +337,7 @@ def test_author_title_search_full_author_name_filters_bad_literal(monkeypatch):
  monkeypatch.setattr(main,'flibusta',Flib())
  msg=_FakeMessage()
  assert run(main.send_author_title_results(msg,'Лев Толстой','Исповедь')) is True
- assert msg.answers and 'Лев Толстой' in msg.answers[-1][0]
+ assert any('Лев Толстой' in text for text in msg.edits)
  assert 'королевы' not in msg.answers[-1][0]
 
 def test_author_title_search_falls_back_to_author_books(monkeypatch):
@@ -345,7 +355,7 @@ def test_author_title_search_falls_back_to_author_books(monkeypatch):
  monkeypatch.setattr(main,'flibusta',Flib())
  msg=_FakeMessage()
  assert run(main.send_author_title_results(msg,'Лев Толстой','Исповедь')) is True
- assert msg.answers and 'Исповедь' in msg.answers[-1][0] and 'Война' not in msg.answers[-1][0]
+ assert any('Исповедь' in text and 'Война' not in text for text in msg.edits)
 
 def test_natural_title_author_query_searches_title_and_filters_author(monkeypatch):
  import app.main as main
@@ -356,7 +366,8 @@ def test_natural_title_author_query_searches_title_and_filters_author(monkeypatc
  monkeypatch.setattr(main,'flibusta',Flib())
  msg=_FakeMessage('Восток Патту')
  run(main.search_text(msg))
- buttons=[button.text for row in msg.answers[-1][1]['reply_markup'].inline_keyboard for button in row]
+ markup=msg.edit_payloads[-1][1]['reply_markup']
+ buttons=[button.text for row in markup.inline_keyboard for button in row]
  assert any('Эдит Патту' in text for text in buttons)
  assert not any('Карел Чапек' in text for text in buttons)
 
@@ -522,7 +533,7 @@ def test_home_inline_keyboard_has_main_actions():
  assert 'Напиши название' in text and '/search' not in text
  rows=home_keyboard().inline_keyboard
  labels=[button.text for row in rows for button in row]
- assert {'🔎 Как искать','⭐ Избранное','🕘 История','📚 Последняя книга','⚙️ Kindle','❓ Помощь'} <= set(labels)
+ assert {'🔎 Как искать','⭐ Избранное','🕘 История','📚 Последняя книга','📱 Читалки','❓ Помощь'} <= set(labels)
 
 def _book_details_for_card(annotation='Short', cover_url=None):
  from app.flibusta import BookDetails, DownloadFormat

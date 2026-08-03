@@ -56,7 +56,7 @@ class EmailSender:
         message["From"] = self.from_email
         message["To"] = to_email
         message["Subject"] = subject
-        message.set_content("Sent to Kindle by your private library bot.")
+        message.set_content("Sent by your private library bot.")
         maintype, _, subtype = content_type.partition("/")
         message.add_attachment(
             content,

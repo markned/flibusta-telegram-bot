@@ -12,7 +12,7 @@
 - избранное, история отправок и последняя книга через кнопки;
 - более осторожный smart search для неоднозначных запросов;
 - запоминание предпочитаемого формата пользователя в SQLite;
-- отправка книг на Kindle по e-mail через generic SMTP/Gmail;
+- отправка книг на Kindle и PocketBook по e-mail через generic SMTP/Gmail;
 - опциональный AI-помощник для формулировки книжных запросов.
 
 
@@ -24,10 +24,21 @@
 - ⭐ Избранное
 - 🕘 История
 - 📚 Последняя
-- ⚙️ Kindle
+- 📱 Читалки
 - ❓ Помощь
 
-Стартовый экран объясняет примеры запросов и даёт inline-кнопки для поиска, Kindle, избранного, истории и помощи. Админские команды скрыты от обычных пользователей; при необходимости их можно включить только для админских чатов через `UI_SHOW_ADMIN_COMMANDS=true`. Для отладки compact command menu можно вернуть флагом `UI_SHOW_POWER_USER_COMMANDS=true`, но production default — пустое меню команд.
+Стартовый экран объясняет примеры запросов и даёт inline-кнопки для поиска, читалок, избранного, истории и помощи. Админские команды скрыты от обычных пользователей; при необходимости их можно включить только для админских чатов через `UI_SHOW_ADMIN_COMMANDS=true`. Для отладки compact command menu можно вернуть флагом `UI_SHOW_POWER_USER_COMMANDS=true`, но production default — пустое меню команд.
+
+## Надёжный поиск
+
+Обычный текст обрабатывается детерминированно. Поиск книг и авторов выполняется параллельно, но весь запрос ограничен общим бюджетом `SEARCH_TOTAL_TIMEOUT_SECONDS`. Если точного результата нет, бот пробует не больше `SEARCH_FALLBACK_MAX_QUERIES` укороченных вариантов. Пустые ответы не кешируются надолго, а пользователь сразу видит сообщение о ходе поиска.
+
+Рекомендуемые production-значения:
+
+```env
+SEARCH_TOTAL_TIMEOUT_SECONDS=12
+SEARCH_FALLBACK_MAX_QUERIES=2
+```
 
 ## Локальный запуск
 ```bash
@@ -51,6 +62,12 @@ python3.12 -m venv .venv
 ## Send to Kindle
 
 Kindle delivery is implemented as generic SMTP: the bot downloads the selected book, attaches it to an e-mail, and sends it to the user’s Kindle address. Gmail SMTP is the practical default for a private/family bot; Amazon SES remains supported as an optional SMTP provider, but it is not required.
+
+## Send to PocketBook
+
+Open `📱 Читалки` → `PocketBook` and save the device address issued by Send-to-PocketBook. The address must end in `@pbsync.com`. PocketBook may ask the user to approve `SMTP_FROM_EMAIL` as a trusted sender after the first message.
+
+PocketBook delivery reuses the same SMTP connection, in-process queue, rate limits and delivery history as Kindle. Preferred format order is EPUB, FB2, PDF, TXT. No additional service or dependency is required, and downloaded files are not stored after delivery.
 
 The Kindle contour is intentionally small: SQLite settings and delivery history, a lightweight in-process queue, user progress updates, rate limits, and operator diagnostics. No book files are stored permanently.
 
