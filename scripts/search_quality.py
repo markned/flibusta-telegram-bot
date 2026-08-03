@@ -22,8 +22,7 @@ def case_matches(case: dict[str, object]) -> bool:
         return False
     if case.get("title") and norm(decision.title_part or "") != norm(str(case["title"])):
         return False
-    topic = norm(decision.topic or "")
-    return all(norm(str(token)) in topic for token in case.get("topic_contains", []))
+    return True
 
 
 def main() -> None:

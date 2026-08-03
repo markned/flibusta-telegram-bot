@@ -1,60 +1,309 @@
 [
-  {"query": "Дюна", "kind": "exact_search", "tier": "regression"},
-  {"query": "Восток", "kind": "exact_search", "tier": "regression"},
-  {"query": "1984", "kind": "exact_search", "tier": "regression"},
-  {"query": "Мастер и Маргарита", "kind": "exact_search", "tier": "regression"},
-  {"query": "Подборка стихотворений", "kind": "exact_search", "tier": "regression"},
-  {"query": "Сто лет одиночества", "kind": "exact_search", "tier": "regression"},
-  {"query": "Преступление и наказание", "kind": "exact_search", "tier": "regression"},
-  {"query": "Пикник на обочине", "kind": "exact_search", "tier": "regression"},
-  {"query": "Цветы для Элджернона", "kind": "exact_search", "tier": "regression"},
-  {"query": "Мы", "kind": "exact_search", "tier": "regression"},
-  {"query": "Игра в бисер", "kind": "exact_search", "tier": "regression"},
-  {"query": "Чапаев и Пустота", "kind": "exact_search", "tier": "regression"},
-  {"query": "Парфюмер", "kind": "exact_search", "tier": "regression"},
-  {"query": "Три товарища", "kind": "exact_search", "tier": "regression"},
-  {"query": "Норвежский лес", "kind": "exact_search", "tier": "regression"},
-
-  {"query": "Эдит Патту", "kind": "author_search", "tier": "regression"},
-  {"query": "Лев Толстой", "kind": "author_search", "tier": "regression"},
-  {"query": "Виктор Пелевин", "kind": "author_search", "tier": "regression"},
-  {"query": "Владимир Сорокин", "kind": "author_search", "tier": "regression"},
-  {"query": "Федор Достоевский", "kind": "author_search", "tier": "regression"},
-  {"query": "Харуки Мураками", "kind": "author_search", "tier": "regression"},
-  {"query": "Джордж Оруэлл", "kind": "author_search", "tier": "regression"},
-  {"query": "Пол Остер", "kind": "author_search", "tier": "regression"},
-  {"query": "Аркадий Стругацкий", "kind": "author_search", "tier": "regression"},
-  {"query": "аркадий стругацкий", "kind": "author_search", "tier": "regression"},
-  {"query": "Антон Чехов", "kind": "author_search", "tier": "regression"},
-  {"query": "антон чехов", "kind": "author_search", "tier": "regression"},
-  {"query": "Фрэнк Герберт", "kind": "author_search", "tier": "regression"},
-  {"query": "фрэнк герберт", "kind": "author_search", "tier": "regression"},
-
-  {"query": "Исповедь Толстой", "kind": "author_title_search", "author": "толстой", "title": "исповедь", "tier": "regression"},
-  {"query": "исповедь толстой", "kind": "author_title_search", "author": "толстой", "title": "исповедь", "tier": "regression"},
-  {"query": "Толстой Исповедь", "kind": "author_title_search", "author": "толстой", "title": "исповедь", "tier": "regression"},
-  {"query": "толстой исповедь", "kind": "author_title_search", "author": "толстой", "title": "исповедь", "tier": "regression"},
-  {"query": "Идиот Достоевский", "kind": "author_title_search", "author": "достоевский", "title": "идиот", "tier": "regression"},
-  {"query": "идиот достоевский", "kind": "author_title_search", "author": "достоевский", "title": "идиот", "tier": "regression"},
-  {"query": "Достоевский Идиот", "kind": "author_title_search", "author": "достоевский", "title": "идиот", "tier": "regression"},
-  {"query": "преступление и наказание достоевский", "kind": "author_title_search", "author": "достоевский", "title": "преступление и наказание", "tier": "regression"},
-  {"query": "Восток Патту", "kind": "author_title_search", "author": "патту", "title": "восток", "tier": "regression"},
-  {"query": "Патту Восток", "kind": "author_title_search", "author": "патту", "title": "восток", "tier": "regression"},
-  {"query": "Мастер и Маргарита Булгаков", "kind": "author_title_search", "author": "булгаков", "title": "мастер и маргарита", "tier": "regression"},
-  {"query": "Булгаков Мастер и Маргарита", "kind": "author_title_search", "author": "булгаков", "title": "мастер и маргарита", "tier": "regression"},
-  {"query": "Мы Замятин", "kind": "author_title_search", "author": "замятин", "title": "мы", "tier": "regression"},
-  {"query": "Оруэлл 1984", "kind": "author_title_search", "author": "оруэлл", "title": "1984", "tier": "regression"},
-  {"query": "Дюна Герберт", "kind": "author_title_search", "author": "герберт", "title": "дюна", "tier": "regression"},
-  {"query": "Герберт Дюна", "kind": "author_title_search", "author": "герберт", "title": "дюна", "tier": "regression"},
-
-  {"query": "антиутопия", "kind": "recommendation", "topic_contains": ["антиутопия"], "tier": "regression"},
-  {"query": "киберпанк", "kind": "recommendation", "topic_contains": ["киберпанк"], "tier": "regression"},
-  {"query": "попаданцы", "kind": "recommendation", "topic_contains": ["попаданцы"], "tier": "regression"},
-  {"query": "мрачное фэнтези", "kind": "recommendation", "topic_contains": ["мрачное", "фэнтези"], "tier": "regression"},
-  {"query": "магический реализм", "kind": "recommendation", "topic_contains": ["магический", "реализм"], "tier": "regression"},
-  {"query": "книга о попаданцах", "kind": "recommendation", "topic_contains": ["попаданцах"], "tier": "regression"},
-  {"query": "что почитать как Пелевин", "kind": "discovery_optional", "topic_contains": ["пелевин"], "tier": "regression"},
-  {"query": "подборка русского постмодерна", "kind": "discovery_optional", "topic_contains": ["русского", "постмодерна"], "tier": "regression"},
-  {"query": "немецкий постмодерн от первого лица", "kind": "discovery_optional", "topic_contains": ["немецкий", "постмодерн", "первого", "лица"], "tier": "regression"},
-  {"query": "книги как 1984", "kind": "recommendation", "topic_contains": ["1984"], "tier": "regression"}
+  {
+    "query": "Дюна",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Восток",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "1984",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Мастер и Маргарита",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Подборка стихотворений",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Сто лет одиночества",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Преступление и наказание",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Пикник на обочине",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Цветы для Элджернона",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Мы",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Игра в бисер",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Чапаев и Пустота",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Парфюмер",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Три товарища",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Норвежский лес",
+    "kind": "exact_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Эдит Патту",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Лев Толстой",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Виктор Пелевин",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Владимир Сорокин",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Федор Достоевский",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Харуки Мураками",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Джордж Оруэлл",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Пол Остер",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Аркадий Стругацкий",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "аркадий стругацкий",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Антон Чехов",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "антон чехов",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Фрэнк Герберт",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "фрэнк герберт",
+    "kind": "author_search",
+    "tier": "regression"
+  },
+  {
+    "query": "Исповедь Толстой",
+    "kind": "author_title_search",
+    "author": "толстой",
+    "title": "исповедь",
+    "tier": "regression"
+  },
+  {
+    "query": "исповедь толстой",
+    "kind": "author_title_search",
+    "author": "толстой",
+    "title": "исповедь",
+    "tier": "regression"
+  },
+  {
+    "query": "Толстой Исповедь",
+    "kind": "author_title_search",
+    "author": "толстой",
+    "title": "исповедь",
+    "tier": "regression"
+  },
+  {
+    "query": "толстой исповедь",
+    "kind": "author_title_search",
+    "author": "толстой",
+    "title": "исповедь",
+    "tier": "regression"
+  },
+  {
+    "query": "Идиот Достоевский",
+    "kind": "author_title_search",
+    "author": "достоевский",
+    "title": "идиот",
+    "tier": "regression"
+  },
+  {
+    "query": "идиот достоевский",
+    "kind": "author_title_search",
+    "author": "достоевский",
+    "title": "идиот",
+    "tier": "regression"
+  },
+  {
+    "query": "Достоевский Идиот",
+    "kind": "author_title_search",
+    "author": "достоевский",
+    "title": "идиот",
+    "tier": "regression"
+  },
+  {
+    "query": "преступление и наказание достоевский",
+    "kind": "author_title_search",
+    "author": "достоевский",
+    "title": "преступление и наказание",
+    "tier": "regression"
+  },
+  {
+    "query": "Восток Патту",
+    "kind": "author_title_search",
+    "author": "патту",
+    "title": "восток",
+    "tier": "regression"
+  },
+  {
+    "query": "Патту Восток",
+    "kind": "author_title_search",
+    "author": "патту",
+    "title": "восток",
+    "tier": "regression"
+  },
+  {
+    "query": "Мастер и Маргарита Булгаков",
+    "kind": "author_title_search",
+    "author": "булгаков",
+    "title": "мастер и маргарита",
+    "tier": "regression"
+  },
+  {
+    "query": "Булгаков Мастер и Маргарита",
+    "kind": "author_title_search",
+    "author": "булгаков",
+    "title": "мастер и маргарита",
+    "tier": "regression"
+  },
+  {
+    "query": "Мы Замятин",
+    "kind": "author_title_search",
+    "author": "замятин",
+    "title": "мы",
+    "tier": "regression"
+  },
+  {
+    "query": "Оруэлл 1984",
+    "kind": "author_title_search",
+    "author": "оруэлл",
+    "title": "1984",
+    "tier": "regression"
+  },
+  {
+    "query": "Дюна Герберт",
+    "kind": "author_title_search",
+    "author": "герберт",
+    "title": "дюна",
+    "tier": "regression"
+  },
+  {
+    "query": "Герберт Дюна",
+    "kind": "author_title_search",
+    "author": "герберт",
+    "title": "дюна",
+    "tier": "regression"
+  },
+  {
+    "query": "антиутопия",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  },
+  {
+    "query": "киберпанк",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  },
+  {
+    "query": "попаданцы",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  },
+  {
+    "query": "мрачное фэнтези",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  },
+  {
+    "query": "магический реализм",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  },
+  {
+    "query": "книга о попаданцах",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  },
+  {
+    "query": "что почитать как Пелевин",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  },
+  {
+    "query": "подборка русского постмодерна",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  },
+  {
+    "query": "немецкий постмодерн от первого лица",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  },
+  {
+    "query": "книги как 1984",
+    "kind": "unsupported_topic",
+    "tier": "regression"
+  }
 ]

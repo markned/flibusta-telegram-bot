@@ -1,146 +1,38 @@
 # Current handoff
 
-## Project shape
-- aiogram Telegram bot
-- SQLite persistence and migrations
-- optional AI recommendation layer
-- Kindle delivery through SES SMTP
+## Current architecture
 
-## Current task plan
-Files likely to change:
-- `app/main.py`
-- `app/services/intent_router.py`
-- `app/services/ai_assistant.py`
-- `app/services/recommendation_filters.py`
-- focused routing tests
+- Natural text uses one deterministic `SearchService`.
+- Supported search intents: exact title, author, author+title, and safe fallback.
+- Broad genre/recommendation phrases are not searched literally; the user is asked for a title or author.
+- AI assistant, OpenAI planning, Tavily discovery, recommendation packs, pending confirmations, and literary provider scaffolding have been removed.
+- Flibusta remains the only catalog source.
+- Search/download/reader delivery/favorites/history/admin flows remain intact.
 
-Tests to add/update:
-- recommendation instructions route automatically
-- exact title `Подборка стихотворений` remains exact
-- author and author-title examples route deterministically
-- weak recommendation anchors are rejected
-- exact title path never calls AI/discovery
+## Search reliability
 
-Expected behavior:
-- free text auto-routes without requiring slash commands
-- instruction word `подборка` never becomes a recommendation search anchor
-- exact titles and author searches remain web-free and deterministic
+- One total search deadline (`SEARCH_TOTAL_TIMEOUT_SECONDS`).
+- At most `SEARCH_FALLBACK_MAX_QUERIES` shortened variants.
+- Case-insensitive author/title matching.
+- One keyboard-layout correction for Latin input.
+- Book and author branches run concurrently and preserve partial success.
+- Empty responses are not cached.
+- Fresh SQLite cache is preferred; recent stale data can be used only when Flibusta fails.
+- A small in-memory circuit breaker prevents repeated failing calls.
 
-Risks:
-- cheap heuristics can misclassify uncommon two-word titles
-- recommendation topic stripping must stay conservative
+## Production configuration additions
 
-## Current guardrails
-- low-memory VPS target
-- exact search must not depend on AI
-- no permanent storage of downloaded files
-- no real network calls in tests
+```env
+CACHE_STALE_IF_ERROR_SECONDS=604800
+FLIBUSTA_CIRCUIT_BREAKER_FAILURES=3
+FLIBUSTA_CIRCUIT_BREAKER_COOLDOWN_SECONDS=30
+```
 
-## Before handing off
-- `make check` ✅
+Legacy AI/discovery variables are ignored for rolling-deploy safety and should be removed from the production `.env`.
 
-## Completed in previous pass
-- restored result sending in `/search`
-- kept free-text routing deterministic unless the query is recommendation-like
-- retained reverse title/surname fallback for cases like `Исповедь Толстой`
-- fixed recommendation regex matching and added bounded books-per-query config
+## Constraints
 
-## Completed in this pass
-- added a bounded discovery service layer with Tavily provider, idea generator, matcher, and recommender
-- added `/discover`, `/discover_web`, and discovery-backed `/recommend`
-- kept final UI restricted to real matched Flibusta `book_id` values
-- added discovery cache keys, in-memory daily web limits, and concurrency cap
-- added safe `/admin_discovery_status`
-- documented Tavily env flags and added mocked discovery tests
-- added deterministic intent router and recommendation topic extraction
-- routed free text through exact/author/author-title/recommendation/discovery decisions
-- filtered generic recommendation anchors before AI expansion
-- passed cleaned recommendation context into AI planner
-- preserved exact title handling for `Подборка стихотворений`
-- added `/admin_intent` dry-run diagnostics and safe intent logging
-- expanded `/admin_discovery_status` without live network probes or secret output
-- discovery result UI now reports web source only when web snippets were actually used
-- centralized discovery web activation behind safe `Settings` properties
-- added config regression tests so `DISCOVERY_*` env vars load without forcing Tavily on
-
-## Completed in this pass
-- fixed broken book-card callback path
-- added confirmation-gated broad recommendations with tiny TTL pending store
-- made author-title routing case-insensitive
-- added neutral recommendation clarifier and disabled literary-source abstraction
-
-## Intentionally deferred
-- no live Tavily health probe; admin status stays non-networked
-- no durable rate-limit table yet; current in-memory daily counter is deliberately lightweight
-- router heuristics still need watching for uncommon ambiguous two-word titles
-
-## Completed in Gmail SMTP / Kindle UX pass
-- switched SMTP defaults from SES-first to generic `custom`, with provider presets for `gmail`, `google_workspace`, `zoho`, `brevo`, `mailgun`, `amazon_ses`, and `disabled`
-- added effective SMTP config helpers and safe startup/admin diagnostics without SMTP secrets
-- added Gmail-oriented `.env.gmail.example`, full `.env.production.example`, and `docs/prod-env-gmail.md`
-- redesigned Kindle menu to be button-first: save e-mail, show sender, format selector, sender-confirmed flag, test e-mail, history, remove
-- added SQLite migration `006_add_kindle_sender_confirmation` and repository support for `approved_sender_confirmed`
-- changed Kindle e-mail body to private-library wording and generic SMTP/Gmail error copy
-- updated README away from SES-first deployment guidance
-- tests: `make check` ✅ 88 passed
-
-## Deployment note
-Use `SMTP_PROVIDER=gmail`, host `smtp.gmail.com`, port `587`, STARTTLS true, and paste the Google app password only into the server `.env`. Do not commit or document the real password.
-
-## Completed in cover UI / Kindle metadata pass
-- added `BookDetails.cover_url` and best-effort Flibusta cover extraction heuristics
-- added lightweight cover resolver modules with provider order, SQLite metadata cache, negative cache, and safe cover downloader
-- book cards now send photo+caption when a reliable cover is available, falling back to text on any failure
-- added EPUB-only Kindle metadata polishing through optional Calibre `ebook-meta`; no `ebook-convert`, no FB2→EPUB conversion
-- Kindle EPUB sends best-effort clean filename/title/authors and optional embedded cover; raw file is sent if polishing fails or Calibre is missing
-- added admin Kindle diagnostics for cover lookup and metadata tool availability
-- updated env templates and README with cover/metadata settings and optional `sudo apt install -y calibre`
-- tests: `make check` ✅ 110 passed
-
-## Cover/metadata operational notes
-- no image bytes are cached in SQLite or memory; only cover metadata/negative results are cached
-- `COVER_PROVIDER_ORDER=flibusta` is the fastest conservative setting if external cover lookup feels slow
-- keep `KINDLE_WORKER_CONCURRENCY=1` on the low-memory VPS
-
-## Completed in clean Telegram UI pass
-- normal users now get an empty Telegram slash-command menu by default
-- added `UI_HIDE_COMMAND_MENU_FOR_USERS`, `UI_SHOW_ADMIN_COMMANDS`, `UI_SHOW_POWER_USER_COMMANDS`, `UI_HOME_INLINE_BUTTONS`, and `UI_REPLY_KEYBOARD_ENABLED`
-- `/start` and `/help` remain hidden fallbacks and render button-first home/help screens
-- common actions are reachable through persistent reply buttons and inline home buttons
-- Kindle setup remains command-compatible but user-facing flows use buttons only
-- search/no-results/book-card copy and buttons were simplified
-
-## Clean UI operational notes
-- production default is `UI_HIDE_COMMAND_MENU_FOR_USERS=true` and `UI_SHOW_ADMIN_COMMANDS=false`
-- set `UI_SHOW_ADMIN_COMMANDS=true` only if admins want a small scoped menu
-- set `UI_SHOW_POWER_USER_COMMANDS=true` only for debugging; it restores a compact default command menu
-
-## Completed in search reliability hotfix
-- made Flibusta combined search tolerate partial failures: book results are kept if author lookup times out, and vice versa
-- added deterministic title+author routing for `Восток Патту` / `восток патту` while keeping `Эдит Патту` as author search
-- added regression tests for partial Flibusta failures and natural title+author search filtering
-- tests: `make check` ✅ 122 passed
-
-## Current search + reader delivery release
-- combined Flibusta book/author lookup now runs in parallel and preserves partial success
-- natural smart search has one 12-second wall-clock budget and at most two bounded fallback queries
-- ranking now considers token coverage and lightweight title similarity; empty/transient search results are not persisted in cache
-- users see an editable `Ищу в библиотеке…` progress message instead of a silent wait
-- added generic SQLite reader destination storage and PocketBook `@pbsync.com` setup
-- Kindle and PocketBook share one SMTP sender, one queue, retry limits, history, EPUB metadata polishing and cover embedding
-- book cards now use `📤 На читалку`; users choose Kindle or PocketBook only when both are configured
-- legacy Kindle callbacks and hidden commands remain compatible
-
-## Search quality baseline
-- added 50 real Russian-language golden routing cases covering exact titles, authors, author+title queries and broad recommendations
-- regression cases now fail CI individually; documented backlog cases participate in the measured 86% baseline floor
-- `make search-quality` prints the current routing score and the exact known gaps without network access
-- `make test-search` now includes the resolver and golden search suite
-- fixed false author+title routing for title-like phrases beginning with surname-shaped words, including `Норвежский лес` and `Чапаев и Пустота`
-- raised the measured routing quality floor from 86% to 90%
-- recognized `Аркадий Стругацкий` and `Антон Чехов` as authors in both uppercase and lowercase input
-- raised the measured routing quality floor from 90% to 94%
-- recognized `Дюна Герберт` / `Герберт Дюна` as author+title searches while preserving `Фрэнк Герберт` as an author query
-- raised the measured routing quality floor from 94% to 96%
-- classified broad genre and similarity phrases without sending them into literal catalog search when AI/discovery are disabled
-- reached a 100% routing score across the current 55-case golden dataset
+- Low-memory VPS; no external queue or database.
+- No downloaded books stored permanently.
+- No real network calls in tests.
+- Keep Kindle/PocketBook worker concurrency at 1 in production.

@@ -16,10 +16,13 @@ class Database:
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.path) as conn:
             conn.row_factory = aiosqlite.Row
+            await conn.execute("PRAGMA foreign_keys=ON")
+            await conn.execute("PRAGMA busy_timeout=5000")
             yield conn
 
     async def initialize(self) -> None:
         async with self.connect() as conn:
+            await conn.execute("PRAGMA journal_mode=WAL")
             await run_migrations(conn)
 
     async def ping(self) -> bool:

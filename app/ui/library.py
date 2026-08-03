@@ -44,20 +44,6 @@ def combined_results_keyboard(bs:SearchSession,aus:AuthorSession):
  for item in bs.results[:5]: kb.row(InlineKeyboardButton(text=(item.title if not item.author else f'{item.title} - {item.author}')[:64],callback_data=f'book:{item.book_id}'))
  for item in aus.authors[:5]: kb.row(InlineKeyboardButton(text=f'Автор: {item.name}'[:64],callback_data=f'author:{aus.session_id}:{item.author_id}'))
  kb.row(InlineKeyboardButton(text='Показать больше книг',callback_data=f'page:{bs.session_id}:0'),InlineKeyboardButton(text='Показать больше авторов',callback_data=f'apage:{aus.session_id}:0')); return kb.as_markup()
-def recommendation_text(query:str,count:int)->str:
- return f'<b>Подборка</b>\nПо запросу: <b>{escape(query)}</b>\nКниг: {count}'
-def recommendation_details_text(query:str,items:list[tuple])->str:
- lines=[f'<b>Подборка</b>\nПо запросу: <b>{escape(query)}</b>']
- for index,(book,details) in enumerate(items,1):
-  annotation=(details.annotation or '').strip()
-  if annotation:
-   annotation=' '.join(annotation.split())
-   if len(annotation)>180: annotation=annotation[:177].rstrip()+'…'
-  else:
-   annotation='Аннотация не указана.'
-  author=book.author or ', '.join(details.authors) or 'Автор не указан'
-  lines.append(f'<b>{index}. {escape(book.title)}</b> — {escape(author)}\n{escape(annotation)}')
- return '\n\n'.join(lines)
 def book_text(details:BookDetails,annotation_max_chars:int,full_annotation:bool=False)->str:
  parts=[f'<b>{escape(details.title)}</b>']
  if details.authors: parts.append(escape(', '.join(details.authors[:5])))
@@ -98,7 +84,7 @@ def formats_keyboard(details:BookDetails,preferred_format:str|None,is_favorite:b
  if details.annotation and len(details.annotation)>annotation_max_chars: kb.row(InlineKeyboardButton(text='📖 Описание полностью',callback_data=f'annotation:{details.book_id}'))
  return kb.as_markup()
 def main_reply_keyboard():
- return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='⭐ Избранное'),KeyboardButton(text='🕘 История')],[KeyboardButton(text='📚 Последняя'),KeyboardButton(text='📱 Читалки')],[KeyboardButton(text='❓ Помощь')]],resize_keyboard=True,is_persistent=True,input_field_placeholder='Книга, автор или что хочется почитать')
+ return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='⭐ Избранное'),KeyboardButton(text='🕘 История')],[KeyboardButton(text='📚 Последняя'),KeyboardButton(text='📱 Читалки')],[KeyboardButton(text='❓ Помощь')]],resize_keyboard=True,is_persistent=True,input_field_placeholder='Название книги или автор')
 def history_text(items:list[DownloadHistoryItem],failed:bool=False)->str:
  if not items:return '<b>Неудачные отправки</b>\n\nПока пусто.' if failed else '<b>История</b>\n\nПока пусто.'
  lines=['<b>Неудачные отправки</b>' if failed else '<b>История</b>']

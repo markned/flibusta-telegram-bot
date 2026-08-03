@@ -3,7 +3,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    # Ignore removed legacy AI/discovery keys that may still exist in a server
+    # .env during a rolling deploy. They no longer enable any functionality.
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     telegram_bot_token: str = Field(alias="TELEGRAM_BOT_TOKEN")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
@@ -60,6 +62,9 @@ class Settings(BaseSettings):
     cache_smart_search_ttl_seconds: int = Field(default=1800, alias="CACHE_SMART_SEARCH_TTL_SECONDS")
     cache_book_details_ttl_seconds: int = Field(default=21600, alias="CACHE_BOOK_DETAILS_TTL_SECONDS")
     cache_author_books_ttl_seconds: int = Field(default=21600, alias="CACHE_AUTHOR_BOOKS_TTL_SECONDS")
+    cache_stale_if_error_seconds: int = Field(default=604800, alias="CACHE_STALE_IF_ERROR_SECONDS")
+    flibusta_circuit_breaker_failures: int = Field(default=3, alias="FLIBUSTA_CIRCUIT_BREAKER_FAILURES")
+    flibusta_circuit_breaker_cooldown_seconds: float = Field(default=30, alias="FLIBUSTA_CIRCUIT_BREAKER_COOLDOWN_SECONDS")
     book_annotation_max_chars: int = Field(default=1200, alias="BOOK_ANNOTATION_MAX_CHARS")
 
     book_cover_ui_enabled: bool = Field(default=True, alias="BOOK_COVER_UI_ENABLED")
@@ -79,34 +84,6 @@ class Settings(BaseSettings):
     search_rate_limit_per_minute: int = Field(default=20, alias="SEARCH_RATE_LIMIT_PER_MINUTE")
     download_rate_limit_per_hour: int = Field(default=30, alias="DOWNLOAD_RATE_LIMIT_PER_HOUR")
     access_control_enabled: bool = Field(default=True, alias="ACCESS_CONTROL_ENABLED")
-    ai_enabled: bool = Field(default=False, alias="AI_ENABLED")
-    openai_api_key: str | None = Field(default=None, alias="OPENAI_API_KEY")
-    ai_model: str = Field(default="gpt-5-nano", alias="AI_MODEL")
-    ai_intent_cache_ttl_seconds: int = Field(default=86400, alias="AI_INTENT_CACHE_TTL_SECONDS")
-    ai_recommendation_max_queries_used: int = Field(default=6, alias="AI_RECOMMENDATION_MAX_QUERIES_USED")
-    ai_recommendation_target_results: int = Field(default=8, alias="AI_RECOMMENDATION_TARGET_RESULTS")
-    ai_recommendation_min_results: int = Field(default=5, alias="AI_RECOMMENDATION_MIN_RESULTS")
-    ai_recommendation_max_details: int = Field(default=6, alias="AI_RECOMMENDATION_MAX_DETAILS")
-    ai_recommendation_books_per_query: int = Field(default=3, alias="AI_RECOMMENDATION_BOOKS_PER_QUERY")
-    discovery_enabled: bool = Field(default=True, alias="DISCOVERY_ENABLED")
-    discovery_use_web: bool = Field(default=False, alias="DISCOVERY_USE_WEB")
-    discovery_web_provider: str = Field(default="disabled", alias="DISCOVERY_WEB_PROVIDER")
-    discovery_web_api_key: str | None = Field(default=None, alias="DISCOVERY_WEB_API_KEY")
-    discovery_max_web_results: int = Field(default=5, alias="DISCOVERY_MAX_WEB_RESULTS")
-    discovery_max_web_snippet_chars: int = Field(default=500, alias="DISCOVERY_MAX_WEB_SNIPPET_CHARS")
-    discovery_max_book_ideas: int = Field(default=12, alias="DISCOVERY_MAX_BOOK_IDEAS")
-    discovery_max_flibusta_checks: int = Field(default=8, alias="DISCOVERY_MAX_FLIBUSTA_CHECKS")
-    discovery_max_final_results: int = Field(default=10, alias="DISCOVERY_MAX_FINAL_RESULTS")
-    discovery_cache_ttl_seconds: int = Field(default=604800, alias="DISCOVERY_CACHE_TTL_SECONDS")
-    discovery_user_daily_limit: int = Field(default=5, alias="DISCOVERY_USER_DAILY_LIMIT")
-    discovery_global_daily_limit: int = Field(default=50, alias="DISCOVERY_GLOBAL_DAILY_LIMIT")
-    discovery_concurrency: int = Field(default=1, alias="DISCOVERY_CONCURRENCY")
-    discovery_model: str | None = Field(default=None, alias="DISCOVERY_MODEL")
-    discovery_timeout_seconds: float = Field(default=15, alias="DISCOVERY_TIMEOUT_SECONDS")
-    recommendation_confirmation_ttl_seconds: int = Field(default=900, alias="RECOMMENDATION_CONFIRMATION_TTL_SECONDS")
-    recommendation_confirmation_required: bool = Field(default=True, alias="RECOMMENDATION_CONFIRMATION_REQUIRED")
-    literary_sources_enabled: bool = Field(default=False, alias="LITERARY_SOURCES_ENABLED")
-    literary_source_provider: str = Field(default="disabled", alias="LITERARY_SOURCE_PROVIDER")
     ui_hide_command_menu_for_users: bool = Field(default=True, alias="UI_HIDE_COMMAND_MENU_FOR_USERS")
     ui_show_admin_commands: bool = Field(default=False, alias="UI_SHOW_ADMIN_COMMANDS")
     ui_show_power_user_commands: bool = Field(default=False, alias="UI_SHOW_POWER_USER_COMMANDS")
@@ -179,11 +156,3 @@ class Settings(BaseSettings):
     @property
     def admin_ids(self) -> set[int]:
         return {int(item.strip()) for item in self.admin_user_ids.split(",") if item.strip().isdigit()}
-
-    @property
-    def discovery_web_configured(self) -> bool:
-        return self.discovery_web_provider == "tavily" and bool(self.discovery_web_api_key)
-
-    @property
-    def discovery_web_active(self) -> bool:
-        return self.discovery_enabled and self.discovery_use_web and self.discovery_web_configured

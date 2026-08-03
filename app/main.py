@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from asyncio import sleep, timeout
+from asyncio import sleep
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -56,18 +56,8 @@ from app.services.ebook_metadata import EbookMetadataPolisher
 from app.services.kindle import KindleService
 from app.services.kindle_queue import KindleQueue
 from app.services.cached_flibusta import CachedFlibustaClient
-from app.services.query_analyzer import analyze_query
 from app.services.intent_router import IntentKind, route_intent
-from app.services.pending_recommendations import PendingRecommendationStore
-from app.services.recommendation_clarifier import build_recommendation_clarification
-from app.services.ai_assistant import AiAssistant
-from app.services.recommendation_packs import get_recommendation_pack
-from app.services.recommendation_filters import is_bad_recommendation_candidate, is_weak_recommendation_anchor
-from app.services.recommendations import merge_recommendation_queries
-from app.services.discovery.idea_generator import BookIdeaGenerator
-from app.services.discovery.flibusta_matcher import FlibustaMatcher
-from app.services.discovery.recommender import DiscoveryRateLimiter, DiscoveryRecommender
-from app.services.discovery.web_search import DisabledWebSearchProvider, TavilyWebSearchProvider
+from app.services.search import SearchMode, SearchService
 from app.middlewares.access import AccessMiddleware
 from app.state import (
     AuthorSession,
@@ -83,12 +73,8 @@ from app.state import (
 from app.services.search_logic import (
     base_title as _base_title,
     clean_query as _clean_query,
-    fallback_queries as _fallback_queries,
     norm as _norm,
-    rank_and_dedupe_books as _rank_and_dedupe_books,
-    rank_authors as _rank_authors,
 )
-from app.services.search_resolver import resolve_search
 from app.ui.library import (
     author_results_keyboard as _author_results_keyboard,
     author_results_text as _author_results_text,
@@ -98,8 +84,6 @@ from app.ui.library import (
     formats_keyboard as render_formats_keyboard,
     history_text as _history_text,
     main_reply_keyboard,
-    recommendation_text as _recommendation_text,
-    recommendation_details_text as _recommendation_details_text,
     search_results_keyboard as _search_results_keyboard,
     search_results_text as _search_results_text,
 )
@@ -169,13 +153,28 @@ favorites_repo = FavoritesRepository(db)
 download_history_repo = DownloadHistoryRepository(db)
 last_books_repo = LastBooksRepository(db)
 access_repo = AccessRepository(db)
-flibusta = CachedFlibustaClient(raw_flibusta, cache_repo, enabled=settings.cache_enabled, ttls={
-    "book_search": settings.cache_book_search_ttl_seconds,
-    "author_search": settings.cache_author_search_ttl_seconds,
-    "smart_search": settings.cache_smart_search_ttl_seconds,
-    "book_details": settings.cache_book_details_ttl_seconds,
-    "author_books": settings.cache_author_books_ttl_seconds,
-})
+flibusta = CachedFlibustaClient(
+    raw_flibusta,
+    cache_repo,
+    enabled=settings.cache_enabled,
+    ttls={
+        "book_search": settings.cache_book_search_ttl_seconds,
+        "author_search": settings.cache_author_search_ttl_seconds,
+        "smart_search": settings.cache_smart_search_ttl_seconds,
+        "book_details": settings.cache_book_details_ttl_seconds,
+        "author_books": settings.cache_author_books_ttl_seconds,
+    },
+    stale_if_error_seconds=settings.cache_stale_if_error_seconds,
+    circuit_breaker_failures=settings.flibusta_circuit_breaker_failures,
+    circuit_breaker_cooldown_seconds=settings.flibusta_circuit_breaker_cooldown_seconds,
+)
+search_service = SearchService(
+    flibusta,
+    book_limit=settings.search_results_limit,
+    author_limit=settings.search_results_limit,
+    timeout_seconds=settings.search_total_timeout_seconds,
+    max_fallback_queries=settings.search_fallback_max_queries,
+)
 kindle_settings_repo = KindleSettingsRepository(db)
 reader_settings_repo = ReaderSettingsRepository(db)
 kindle_deliveries_repo = KindleDeliveriesRepository(db)
@@ -220,27 +219,6 @@ kindle_queue = KindleQueue(
     max_attempts=settings.kindle_max_job_attempts,
     retry_base_delay_seconds=settings.kindle_retry_base_delay_seconds,
 )
-ai_assistant = AiAssistant(settings.openai_api_key, settings.ai_model, settings.ai_enabled,cache_repo=cache_repo,cache_ttl_seconds=settings.ai_intent_cache_ttl_seconds)
-
-_web_provider = TavilyWebSearchProvider(settings.discovery_web_api_key, timeout_seconds=settings.discovery_timeout_seconds, max_snippet_chars=settings.discovery_max_web_snippet_chars) if settings.discovery_web_active else DisabledWebSearchProvider()
-pending_recommendations = PendingRecommendationStore(settings.recommendation_confirmation_ttl_seconds)
-discovery_recommender = DiscoveryRecommender(
-    flibusta=flibusta,
-    cache_repo=cache_repo,
-    idea_generator=BookIdeaGenerator(settings.openai_api_key, settings.discovery_model or settings.ai_model, settings.ai_enabled, cache_repo=cache_repo, cache_ttl_seconds=settings.discovery_cache_ttl_seconds, max_ideas=settings.discovery_max_book_ideas, timeout_seconds=settings.discovery_timeout_seconds),
-    matcher=FlibustaMatcher(flibusta, max_checks=settings.discovery_max_flibusta_checks, max_final_results=settings.discovery_max_final_results),
-    web_provider=_web_provider,
-    favorites_repo=favorites_repo,
-    history_repo=download_history_repo,
-    preferences_repo=user_preferences_repo,
-    cache_ttl_seconds=settings.discovery_cache_ttl_seconds,
-    max_web_results=settings.discovery_max_web_results,
-    web_enabled=settings.discovery_web_active,
-    rate_limiter=DiscoveryRateLimiter(settings.discovery_user_daily_limit, settings.discovery_global_daily_limit),
-    concurrency=settings.discovery_concurrency,
-)
-
-
 def _reply_keyboard():
     return main_reply_keyboard() if settings.ui_reply_keyboard_enabled else None
 
@@ -324,49 +302,6 @@ async def author_command(message: Message, command: CommandObject) -> None:
         return
     await send_author_results(message, query)
 
-
-@router.message(Command("recommend"))
-async def recommend_command(message: Message, command: CommandObject) -> None:
-    if not _assistant_ui_enabled():
-        await message.answer("Подборки сейчас отключены. Напиши название книги или автора — я поищу в каталоге.")
-        return
-    query=(command.args or "").strip()
-    if not query:
-        await message.answer("Опиши книгу, автора или настроение обычным сообщением — я сам разберу запрос.")
-        return
-    if await send_discovery_results(message, query, mode="recommend", use_web=False):
-        return
-    await send_ai_results(message, query)
-
-@router.message(Command("discover"))
-async def discover_command(message: Message, command: CommandObject) -> None:
-    if not settings.discovery_enabled:
-        await message.answer("Веб-подборки сейчас отключены. Напиши название книги или автора — я поищу в каталоге.")
-        return
-    query=(command.args or "").strip()
-    if not query:
-        await message.answer("Напиши тему подборки обычным сообщением.")
-        return
-    use_web=settings.discovery_enabled and settings.discovery_use_web
-    if await send_discovery_results(message, query, mode="discover", use_web=use_web):
-        return
-    await send_smart_results(message, query)
-
-@router.message(Command("discover_web"))
-async def discover_web_command(message: Message, command: CommandObject) -> None:
-    if not settings.discovery_enabled:
-        await message.answer("Веб-подборки сейчас отключены. Напиши название книги или автора — я поищу в каталоге.")
-        return
-    query=(command.args or "").strip()
-    if not query:
-        await message.answer("Напиши тему подборки обычным сообщением.")
-        return
-    configured=settings.discovery_web_active
-    if not configured:
-        await message.answer("Веб-подборки сейчас не настроены. Попробую без интернета.")
-    if await send_discovery_results(message, query, mode="discover_web", use_web=configured):
-        return
-    await send_ai_results(message, query)
 
 @router.message(Command("invite"))
 async def invite_command(message: Message, command: CommandObject) -> None:
@@ -486,26 +421,6 @@ async def admin_cache_clear(message: Message, command: CommandObject) -> None:
     deleted = await cache_repo.clear(all_rows=(command.args or "").strip().lower()=="all")
     await message.answer(f"Deleted {deleted} cache rows.")
 
-@router.message(Command("admin_discovery_status"))
-async def admin_discovery_status(message: Message) -> None:
-    if message.from_user.id not in settings.admin_ids: return
-    total, by_type, _ = await cache_repo.stats()
-    discovery_rows = sum(count for kind, count in by_type.items() if kind.startswith("discovery_"))
-    await message.answer(
-        "<b>Discovery</b>\n"
-        f"enabled: {'yes' if settings.discovery_enabled else 'no'}\n"
-        f"web enabled: {'yes' if settings.discovery_use_web else 'no'}\n"
-        f"provider: {escape(settings.discovery_web_provider)}\n"
-        f"api key present: {'yes' if bool(settings.discovery_web_api_key) else 'no'}\n"
-        f"max web results: {settings.discovery_max_web_results}\n"
-        f"max snippet chars: {settings.discovery_max_web_snippet_chars}\n"
-        f"max Flibusta checks: {settings.discovery_max_flibusta_checks}\n"
-        f"daily limits: {settings.discovery_user_daily_limit}/{settings.discovery_global_daily_limit}\n"
-        f"cache TTL: {settings.discovery_cache_ttl_seconds}\n"
-        f"Tavily active for discovery: {'yes' if _tavily_configured() else 'no'}\n"
-        f"discovery cache rows: {discovery_rows}"
-    )
-
 @router.message(Command("admin_intent"))
 async def admin_intent(message: Message, command: CommandObject) -> None:
     if message.from_user.id not in settings.admin_ids: return
@@ -514,9 +429,6 @@ async def admin_intent(message: Message, command: CommandObject) -> None:
         await message.answer("Использование: /admin_intent <запрос>")
         return
     decision=route_intent(query)
-    ai_called=decision.kind in {IntentKind.RECOMMENDATION, IntentKind.DISCOVERY_OPTIONAL}
-    discovery_called=decision.kind == IntentKind.DISCOVERY_OPTIONAL
-    ask_confirmation=ai_called and settings.recommendation_confirmation_required
     handler=_intent_handler(decision.kind)
     await message.answer(
         "<b>Intent dry-run</b>\n"
@@ -527,16 +439,8 @@ async def admin_intent(message: Message, command: CommandObject) -> None:
         f"search_query: {escape(decision.search_query or '—')}\n"
         f"author_part: {escape(decision.author_part or '—')}\n"
         f"title_part: {escape(decision.title_part or '—')}\n"
-        f"topic: {escape(decision.topic or '—')}\n"
-        f"reference_authors: {escape(', '.join(decision.reference_authors) or '—')}\n"
         f"format_hint: {escape(decision.format_hint or '—')}\n"
         f"reasons: {escape(', '.join(decision.reasons) or '—')}\n"
-        f"AI would be called: {'yes' if ai_called else 'no'}\n"
-        f"discovery would be called: {'yes' if discovery_called else 'no'}\n"
-        f"Tavily would be called: {'yes' if discovery_called and _tavily_configured() else 'no'}\n"
-        f"would ask confirmation: {'yes' if ask_confirmation else 'no'}\n"
-        f"confirmation preview: {escape(build_recommendation_clarification(query, decision)) if ask_confirmation else '—'}\n"
-        f"use_web planned: {'yes' if discovery_called and settings.discovery_use_web else 'no'}\n"
         f"handler: {handler}"
     )
 
@@ -580,110 +484,15 @@ async def search_text(message: Message) -> None:
         return
     decision = route_intent(text)
     logger.info("user_id=%s intent=%s confidence=%.2f reasons=%s query_len=%s", message.from_user.id, decision.kind.value, decision.confidence, len(decision.reasons), len(text))
-    logger.debug("intent_detail query=%s cleaned=%s topic=%s", _truncate(text), decision.cleaned_query, decision.topic)
-    if decision.kind == IntentKind.AUTHOR_TITLE_SEARCH:
-        if await send_author_title_results(message, decision.author_part or "", decision.title_part or ""):
-            return
-        await send_smart_results(message, text)
+    logger.debug("intent_detail query=%s cleaned=%s", _truncate(text), decision.cleaned_query)
+    if decision.kind == IntentKind.UNSUPPORTED_TOPIC:
+        await message.answer(
+            "Я ищу книги в каталоге по названию и автору. Напиши название, автора или их вместе."
+        )
         return
-    if decision.kind == IntentKind.AUTHOR_SEARCH:
-        if not await send_author_results(message, decision.search_query or text, show_no_results=False):
-            await send_smart_results(message, text)
-        return
-    if decision.kind in {IntentKind.DISCOVERY_OPTIONAL, IntentKind.RECOMMENDATION}:
-        if not settings.ai_enabled and not settings.discovery_enabled:
-            await message.answer(
-                "Подборки по описанию сейчас отключены. Напиши название книги, автора или название и автора вместе."
-            )
-            return
-        if settings.recommendation_confirmation_required:
-            await ask_recommendation_confirmation(message, text, decision)
-            return
-        if decision.kind == IntentKind.DISCOVERY_OPTIONAL and await send_discovery_results(message, decision.topic or text, mode="auto", use_web=settings.discovery_use_web):
-            return
-        await send_ai_results(message, text, topic=decision.topic, intent=decision.kind.value)
-        return
+    # One deterministic entry point prevents duplicate requests and duplicate
+    # Telegram messages. SearchService owns author/title routing and fallbacks.
     await send_smart_results(message, text)
-
-async def ask_recommendation_confirmation(message: Message, query: str, decision) -> None:
-    pending = pending_recommendations.create(
-        user_id=message.from_user.id,
-        chat_id=message.chat.id,
-        original_query=query,
-        intent_kind=decision.kind.value,
-        topic=decision.topic or query,
-        use_web=decision.kind == IntentKind.DISCOVERY_OPTIONAL and settings.discovery_use_web,
-        mode="auto",
-    )
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Да, собрать подборку", callback_data=f"rec_confirm:{pending.pending_id}"))
-    kb.row(InlineKeyboardButton(text="Нет, искать точную фразу", callback_data=f"rec_exact:{pending.pending_id}"))
-    kb.row(InlineKeyboardButton(text="Отмена", callback_data=f"rec_cancel:{pending.pending_id}"))
-    await message.answer(build_recommendation_clarification(query, decision), reply_markup=kb.as_markup())
-
-def _pending_for_callback(callback: CallbackQuery):
-    pending_id = callback.data.split(":", 1)[1]
-    pending = pending_recommendations.get(pending_id)
-    if pending is None:
-        return None
-    if pending.user_id != callback.from_user.id or pending.chat_id != callback.message.chat.id:
-        return False
-    return pending
-
-class _CallbackMessageProxy:
-    def __init__(self, callback: CallbackQuery):
-        self.from_user = callback.from_user
-        self.chat = callback.message.chat
-        self.bot = callback.message.bot
-        self._message = callback.message
-    async def answer(self, *args, **kwargs):
-        return await self._message.answer(*args, **kwargs)
-
-@router.callback_query(F.data.startswith("rec_confirm:"))
-async def confirm_recommendation(callback: CallbackQuery) -> None:
-    pending = _pending_for_callback(callback)
-    if pending is None:
-        await callback.answer("Запрос устарел. Напиши его ещё раз.")
-        return
-    if pending is False:
-        await callback.answer("Это не твой запрос.")
-        return
-    pending_recommendations.delete(pending.pending_id)
-    await callback.answer()
-    message = _CallbackMessageProxy(callback)
-    if await send_discovery_results(message, pending.topic, mode=pending.mode, use_web=pending.use_web):
-        return
-    await send_ai_results(message, pending.original_query, topic=pending.topic, intent=pending.intent_kind)
-
-@router.callback_query(F.data.startswith("rec_exact:"))
-async def exact_recommendation(callback: CallbackQuery) -> None:
-    pending = _pending_for_callback(callback)
-    if pending is None:
-        await callback.answer("Запрос устарел. Напиши его ещё раз.")
-        return
-    if pending is False:
-        await callback.answer("Это не твой запрос.")
-        return
-    pending_recommendations.delete(pending.pending_id)
-    await callback.answer()
-    await send_smart_results(_CallbackMessageProxy(callback), pending.original_query)
-
-@router.callback_query(F.data.startswith("rec_cancel:"))
-async def cancel_recommendation(callback: CallbackQuery) -> None:
-    pending = _pending_for_callback(callback)
-    if pending is None:
-        await callback.answer("Запрос устарел. Напиши его ещё раз.")
-        return
-    if pending is False:
-        await callback.answer("Это не твой запрос.")
-        return
-    pending_recommendations.delete(pending.pending_id)
-    await callback.answer("Ок, отменил.")
-    try:
-        await callback.message.edit_text("Ок, отменил.")
-    except Exception:
-        pass
-
 
 @router.callback_query(F.data.startswith("book:"))
 async def show_book(callback: CallbackQuery) -> None:
@@ -1043,8 +852,6 @@ async def retry_search(callback: CallbackQuery) -> None:
         return
     if action == "retry_short":
         await send_smart_results(callback.message, " ".join(query.split()[:3]))
-    elif action == "retry_wide":
-        await send_ai_results(callback.message, query)
     elif action == "retry_book":
         await send_search_results(callback.message, query)
     elif action == "retry_author":
@@ -1191,144 +998,57 @@ async def send_search_results(message: Message, query: str) -> None:
         await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
         return
     started_at = monotonic()
+    progress = await telegram_retry(lambda: message.answer("🔎 Ищу книгу…"), attempts=2)
     log_user_action(message.from_user, message.chat.id, "search_start", query=query)
     try:
-        await telegram_retry(
-            lambda: message.bot.send_chat_action(message.chat.id, ChatAction.TYPING),
-            attempts=2,
-        )
-    except TelegramNetworkError:
-        logger.warning("Could not send typing action")
-
-    try:
-        results = _rank_and_dedupe_books(
-            await flibusta.search(_clean_query(query), limit=settings.search_results_limit),
-            query,
-        )
-    except FlibustaError as exc:
-        log_user_action(
-            message.from_user,
-            message.chat.id,
-            "search_failed",
-            query=query,
-            error=str(exc),
-            duration=elapsed(started_at),
-        )
-        await telegram_retry(lambda: message.answer(str(exc)))
+        outcome = await search_service.search_books(query)
+    except (FlibustaError, TimeoutError) as exc:
+        text = str(exc) if isinstance(exc, FlibustaError) else "Поиск занял слишком много времени. Попробуй ещё раз через минуту."
+        await _send_or_edit(message, progress, text)
         return
-
-    if not results:
-        log_user_action(
-            message.from_user,
-            message.chat.id,
-            "search_empty_result",
-            query=query,
-            duration=elapsed(started_at),
-        )
-        await _send_no_results(message, query)
+    if not outcome.books:
+        await _send_no_results(message, query, progress=progress)
         return
+    session = _create_search_session(message.from_user.id, message.chat.id, query, outcome.books)
+    log_user_action(message.from_user, message.chat.id, "search_ok", query=query, results=len(outcome.books), duration=elapsed(started_at))
+    await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
 
-    session = _create_search_session(message.from_user.id, message.chat.id, query, results)
-
-    log_user_action(
-        message.from_user,
-        message.chat.id,
-        "search_ok",
-        query=query,
-        results=len(results),
-        pages=total_pages(len(results)),
-        duration=elapsed(started_at),
-    )
-    await telegram_retry(
-        lambda: message.answer(
-            _search_results_text(session),
-            reply_markup=_search_results_keyboard(session),
-        )
-    )
 
 async def send_author_title_results(message: Message, author: str, title: str) -> bool:
-    """Fast path for obvious 'author + title' queries like 'Лев Толстой исповедь'."""
     progress = await telegram_retry(lambda: message.answer("🔎 Ищу книгу и проверяю автора…"), attempts=2)
     try:
-        async with timeout(settings.search_total_timeout_seconds):
-            results = _rank_and_dedupe_books(
-                await flibusta.search(_clean_query(title), limit=settings.search_results_limit),
-                title,
-            )
-            matched = _filter_author_title_results(results, author)
-            if not matched:
-                matched = await _search_author_books_for_title(author, title)
+        outcome = await search_service.search_author_title(author, title)
     except (FlibustaError, TimeoutError):
         if progress is not None:
-            try: await progress.delete()
-            except Exception: pass
+            try:
+                await progress.delete()
+            except Exception:
+                pass
         return False
-    if not matched:
+    if not outcome.books:
         if progress is not None:
-            try: await progress.delete()
-            except Exception: pass
+            try:
+                await progress.delete()
+            except Exception:
+                pass
         return False
+    query = f"{title} {author}".strip()
     session = _create_search_session(
         message.from_user.id,
         message.chat.id,
-        f"{author} {title}",
-        matched,
-        title=f"<b>Книги</b>\nПо запросу: <b>{escape(author)} {escape(title)}</b>",
+        query,
+        outcome.books,
+        title=f"<b>Нашёл книгу</b>\nЗапрос: <b>{escape(query)}</b>",
     )
     await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
     return True
+
 
 async def send_reversed_author_title_results(message: Message, query: str) -> bool:
     decision = route_intent(query)
     if decision.kind != IntentKind.AUTHOR_TITLE_SEARCH:
         return False
     return await send_author_title_results(message, decision.author_part or "", decision.title_part or "")
-
-
-def _filter_author_title_results(results: list[SearchResult], author: str) -> list[SearchResult]:
-    return [item for item in results if item.author and _author_name_matches(author, item.author)]
-
-
-def _author_name_matches(expected: str, actual: str) -> bool:
-    expected_norm = _norm(expected)
-    actual_norm = _norm(actual)
-    if not expected_norm or not actual_norm:
-        return False
-    if expected_norm in actual_norm or actual_norm in expected_norm:
-        return True
-    parts = [part for part in expected_norm.split() if part]
-    surname = parts[-1] if parts else ""
-    return bool(surname and surname in actual_norm)
-
-
-def _title_matches(expected: str, actual: str) -> bool:
-    expected_norm = _norm(_base_title(expected))
-    actual_norm = _norm(_base_title(actual))
-    if not expected_norm or not actual_norm:
-        return False
-    return actual_norm == expected_norm or expected_norm in actual_norm or actual_norm in expected_norm
-
-
-async def _search_author_books_for_title(author: str, title: str) -> list[SearchResult]:
-    try:
-        authors = _rank_authors(
-            await flibusta.search_authors(_clean_query(author), limit=min(settings.search_results_limit, 10)),
-            author,
-        )
-    except (AttributeError, FlibustaError):
-        return []
-
-    for candidate in authors[:3]:
-        if not _author_name_matches(author, candidate.name):
-            continue
-        try:
-            author_name, books = await flibusta.author_books(candidate.author_id, limit=settings.search_results_limit)
-        except (AttributeError, FlibustaError):
-            continue
-        matched = [SearchResult(item.book_id, item.title, item.author or author_name or candidate.name) for item in books if _title_matches(title, item.title)]
-        if matched:
-            return _rank_and_dedupe_books(matched, title)
-    return []
 
 
 async def send_author_results(message: Message, query: str, *, show_no_results: bool = True) -> bool:
@@ -1339,67 +1059,29 @@ async def send_author_results(message: Message, query: str, *, show_no_results: 
     progress = await telegram_retry(lambda: message.answer("🔎 Ищу автора…"), attempts=2)
     log_user_action(message.from_user, message.chat.id, "author_search_start", query=query)
     try:
-        await telegram_retry(
-            lambda: message.bot.send_chat_action(message.chat.id, ChatAction.TYPING),
-            attempts=2,
-        )
-    except TelegramNetworkError:
-        logger.warning("Could not send typing action")
-
-    try:
-        async with timeout(settings.search_total_timeout_seconds):
-            authors = _rank_authors(
-                await flibusta.search_authors(_clean_query(query), limit=settings.search_results_limit),
-                query,
-            )
+        outcome = await search_service.search_author(query)
     except (FlibustaError, TimeoutError) as exc:
-        log_user_action(
-            message.from_user,
-            message.chat.id,
-            "author_search_failed",
-            query=query,
-            error=str(exc),
-            duration=elapsed(started_at),
-        )
         if show_no_results:
             text = str(exc) if isinstance(exc, FlibustaError) else "Поиск автора занял слишком много времени. Попробуй ещё раз позже."
             await _send_or_edit(message, progress, text)
         elif progress is not None:
-            try: await progress.delete()
-            except Exception: pass
+            try:
+                await progress.delete()
+            except Exception:
+                pass
         return False
-
-    if not authors:
-        log_user_action(
-            message.from_user,
-            message.chat.id,
-            "author_search_empty_result",
-            query=query,
-            duration=elapsed(started_at),
-        )
+    if not outcome.authors:
         if show_no_results:
             await _send_no_results(message, query, progress=progress)
         elif progress is not None:
-            try: await progress.delete()
-            except Exception: pass
+            try:
+                await progress.delete()
+            except Exception:
+                pass
         return False
-
-    session = _create_author_session(message.from_user.id, message.chat.id, query, authors)
-    log_user_action(
-        message.from_user,
-        message.chat.id,
-        "author_search_ok",
-        query=query,
-        authors=len(authors),
-        pages=total_pages(len(authors)),
-        duration=elapsed(started_at),
-    )
-    await _send_or_edit(
-        message,
-        progress,
-        _author_results_text(session),
-        reply_markup=_author_results_keyboard(session),
-    )
+    session = _create_author_session(message.from_user.id, message.chat.id, query, outcome.authors)
+    log_user_action(message.from_user, message.chat.id, "author_search_ok", query=query, authors=len(outcome.authors), duration=elapsed(started_at))
+    await _send_or_edit(message, progress, _author_results_text(session), reply_markup=_author_results_keyboard(session))
     return True
 
 
@@ -1408,72 +1090,48 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
         await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
         return False
     started_at = monotonic()
-    analysis = analyze_query(query)
-    cleaned = _clean_query(analysis.cleaned or query)
-    if analysis.format_hint:
-        await _remember_preferred_format(message.from_user.id, analysis.format_hint)
-    log_user_action(message.from_user, message.chat.id, "smart_search_start", query=query)
     progress = await telegram_retry(lambda: message.answer("🔎 Ищу в библиотеке…"), attempts=2)
+    log_user_action(message.from_user, message.chat.id, "smart_search_start", query=query)
     try:
-        await telegram_retry(
-            lambda: message.bot.send_chat_action(message.chat.id, ChatAction.TYPING),
-            attempts=2,
-        )
-        resolution = await resolve_search(
-            flibusta,
-            cleaned,
-            book_limit=settings.search_results_limit,
-            author_limit=settings.search_results_limit,
-            timeout_seconds=settings.search_total_timeout_seconds,
-            max_fallback_queries=settings.search_fallback_max_queries,
-        )
-        used_query = resolution.used_query
-        raw_books, raw_authors = resolution.books, resolution.authors
+        await telegram_retry(lambda: message.bot.send_chat_action(message.chat.id, ChatAction.TYPING), attempts=2)
+        outcome = await search_service.search(query)
     except FlibustaError as exc:
-        log_user_action(
-            message.from_user,
-            message.chat.id,
-            "smart_search_failed",
-            query=query,
-            error=str(exc),
-            duration=elapsed(started_at),
-        )
         await _send_or_edit(message, progress, str(exc))
         return False
     except TimeoutError:
-        logger.warning("smart search deadline exceeded user_id=%s query_len=%s", message.from_user.id, len(query))
-        await _send_or_edit(
-            message,
-            progress,
-            "Поиск занял слишком много времени. Flibusta сейчас отвечает медленно — попробуй ещё раз через минуту.",
-        )
+        await _send_or_edit(message, progress, "Поиск занял слишком много времени. Flibusta сейчас отвечает медленно — попробуй ещё раз через минуту.")
         return False
 
-    books = _rank_and_dedupe_books(raw_books, query)
-    authors = _rank_authors(raw_authors, query)
-    top_author_is_exact = bool(authors and _norm(authors[0].name) == _norm(cleaned))
-    top_book_is_exact = bool(books and _norm(_base_title(books[0].title)) == _norm(query))
+    plan = outcome.plan
+    if plan.format_hint:
+        await _remember_preferred_format(message.from_user.id, plan.format_hint)
+    if plan.mode == SearchMode.UNSUPPORTED_TOPIC:
+        await _send_or_edit(message, progress, "Я ищу по названию и автору. Напиши конкретную книгу, автора или их вместе.")
+        return False
 
-    if (analysis.likely_author or top_author_is_exact) and not analysis.quoted_title and not top_book_is_exact and authors:
+    books = outcome.books
+    authors = outcome.authors
+    used_query = outcome.used_queries[-1] if outcome.used_queries else plan.cleaned_query
+    top_book_is_exact = bool(books and _norm(_base_title(books[0].title)) == _norm(plan.title or plan.cleaned_query))
+    top_author_is_exact = bool(authors and _norm(authors[0].name) == _norm(plan.author or plan.cleaned_query))
+
+    if plan.mode == SearchMode.AUTHOR and authors:
         session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
-        log_user_action(
-            message.from_user,
-            message.chat.id,
-            "smart_search_author_guess",
-            query=query,
-            authors=len(authors),
-            books=len(books),
-            duration=elapsed(started_at),
-        )
-        await _send_or_edit(
-            message,
-            progress,
-            f"Похоже, это автор. Нашёл по запросу: <b>{escape(used_query)}</b>",
-            reply_markup=_author_results_keyboard(session),
-        )
+        await _send_or_edit(message, progress, _author_results_text(session), reply_markup=_author_results_keyboard(session))
         return True
 
-    if books and authors and not top_book_is_exact and not top_author_is_exact and not analysis.quoted_title:
+    if plan.mode == SearchMode.AUTHOR_TITLE and books:
+        session = _create_search_session(
+            message.from_user.id,
+            message.chat.id,
+            plan.original_query,
+            books,
+            title=f"<b>Нашёл книгу</b>\nЗапрос: <b>{escape(plan.original_query)}</b>",
+        )
+        await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
+        return True
+
+    if books and authors and not top_book_is_exact and not top_author_is_exact:
         book_session = _create_search_session(message.from_user.id, message.chat.id, used_query, books)
         author_session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
         await _send_or_edit(message, progress, _combined_results_text(used_query, books, authors), reply_markup=_combined_results_keyboard(book_session, author_session))
@@ -1481,34 +1139,16 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
 
     if books:
         title = None
-        if used_query != cleaned:
+        if _norm(used_query) != _norm(plan.cleaned_query):
             title = f"Точного совпадения не нашёл. Ближайшее по запросу: <b>{escape(used_query)}</b>"
         session = _create_search_session(message.from_user.id, message.chat.id, used_query, books, title=title)
-        log_user_action(
-            message.from_user,
-            message.chat.id,
-            "smart_search_books",
-            query=query,
-            books=len(books),
-            authors=len(authors),
-            duration=elapsed(started_at),
-        )
-        await _send_or_edit(
-            message,
-            progress,
-            _search_results_text(session),
-            reply_markup=_search_results_keyboard(session),
-        )
+        log_user_action(message.from_user, message.chat.id, "smart_search_books", query=query, books=len(books), authors=len(authors), duration=elapsed(started_at))
+        await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
         return True
 
     if authors:
         session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
-        await _send_or_edit(
-            message,
-            progress,
-            f"Книг не нашёл, но нашёл авторов по запросу: <b>{escape(used_query)}</b>",
-            reply_markup=_author_results_keyboard(session),
-        )
+        await _send_or_edit(message, progress, f"Книг не нашёл, но нашёл авторов по запросу: <b>{escape(used_query)}</b>", reply_markup=_author_results_keyboard(session))
         return True
 
     if show_no_results:
@@ -1519,137 +1159,6 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
         except Exception:
             pass
     return False
-
-async def send_discovery_results(message: Message, query: str, *, mode: str, use_web: bool) -> bool:
-    if not settings.discovery_enabled:
-        return False
-    progress = await message.answer("Собираю идеи и проверяю каталог…")
-    result = await discovery_recommender.recommend(message.from_user.id, query, mode, use_web)
-    if result.note == "web_rate_limited":
-        await _edit_progress(progress, "Лимит веб-подборок на сегодня исчерпан. Попробую обычный подбор без интернета.")
-    if not result.books:
-        await _edit_progress(progress, "Я нашёл идеи по теме, но не смог сопоставить их с книгами в каталоге. К сожалению, ничего подходящего не нашлось.")
-        return False
-    source = "интернет + библиотека" if result.used_web else "модель + библиотека"
-    lines = [
-        "<b>Нашёл один подходящий вариант</b>" if len(result.books) == 1 else "<b>Подборка</b>",
-        f"Запрос: <b>{escape(query)}</b>",
-        f"Источник: {source}",
-        "",
-        "Я проверил идеи из интернета и показываю только то, что нашлось в каталоге." if result.used_web else "Я показываю только книги, которые удалось найти в каталоге.",
-        "",
-    ]
-    for index, book in enumerate(result.books, start=1):
-        lines.append(f"{index}. <b>{escape(book.title)}</b> — {escape(book.author or 'автор не указан')}")
-        if book.reason:
-            lines.append(f"Почему: {escape(book.reason[:180])}")
-    books = [SearchResult(item.book_id, item.title, item.author) for item in result.books]
-    session = _create_search_session(
-        message.from_user.id,
-        message.chat.id,
-        query,
-        books,
-        title=f"<b>Подборка</b>\nПо запросу: <b>{escape(query)}</b>",
-    )
-    await _edit_progress(progress, "Подборка готова.")
-    await message.answer("\n".join(lines), reply_markup=_search_results_keyboard(session))
-    return True
-
-async def send_ai_results(message: Message, query: str, *, topic: str | None = None, intent: str | None = None) -> None:
-    progress = await message.answer("Разбираю запрос…")
-    analysis = analyze_query(query)
-    try:
-        intent = await ai_assistant.understand(query, topic=topic, intent=intent)
-    except Exception:
-        logger.exception("AI search preparation failed")
-        intent = None
-    if intent is None:
-        await _edit_progress(progress, "Не смог разобрать запрос через AI. Ищу обычным способом.")
-        await send_smart_results(message, query)
-        return
-    if analysis.recommendation_like and (intent.kind != "recommend" or _norm(query) in {_norm(item) for item in intent.search_queries}):
-        await _edit_progress(progress, "Похоже, это просьба о подборке. Уточняю варианты…")
-        intent = await ai_assistant.understand(query, force_recommend=True, topic=topic, intent=intent)
-        if intent.kind != "recommend" or _norm(query) in {_norm(item) for item in intent.search_queries}:
-            fallback = get_recommendation_pack(query) or _recommendation_fallback_queries(query)
-            if fallback:
-                intent = type(intent)("recommend", fallback, "Подбираю книги по теме.", [], "")
-            else:
-                if await send_smart_results(message, query, show_no_results=False):
-                    return
-                await _edit_progress(progress, "Не смог собрать надёжную подборку. Попробуй описать запрос чуть конкретнее.")
-                return
-    await _edit_progress(progress, intent.reply)
-    candidate_queries = intent.search_queries
-    if intent.kind == "recommend":
-        candidate_queries = merge_recommendation_queries([item for item in intent.search_queries if not is_weak_recommendation_anchor(item, query)],get_recommendation_pack(topic or query),settings.ai_recommendation_max_queries_used)
-        if not candidate_queries and topic:
-            candidate_queries = [topic]
-    grouped_books = []
-    all_authors = []
-    for index, candidate in enumerate(candidate_queries, start=1):
-        await _edit_progress(progress, f"{intent.reply}\n\nИщу: <b>{escape(candidate)}</b> ({index}/{len(candidate_queries)})")
-        raw_books, raw_authors = await flibusta.search_all(candidate, book_limit=settings.search_results_limit, author_limit=settings.search_results_limit)
-        ranked_books = [b for b in _rank_and_dedupe_books(raw_books, candidate) if not (intent.kind=="recommend" and is_bad_recommendation_candidate(b.title,query,intent.negative_keywords))]
-        if ranked_books:
-            grouped_books.append(ranked_books[:settings.ai_recommendation_books_per_query] if intent.kind == "recommend" else ranked_books)
-        all_authors.extend(_rank_authors(raw_authors, candidate))
-        if intent.kind == "recommend":
-            for author in _rank_authors(raw_authors, candidate)[:1]:
-                try:
-                    _, author_books = await flibusta.author_books(author.author_id, limit=4)
-                    if author_books:
-                        filtered=[b for b in author_books if not is_bad_recommendation_candidate(b.title,query,intent.negative_keywords)]
-                        if filtered: grouped_books.append(filtered[:settings.ai_recommendation_books_per_query])
-                except FlibustaError:
-                    logger.info("Could not expand recommendation author_id=%s", author.author_id)
-        if intent.kind=="recommend" and len(_interleave_book_groups(grouped_books))>=settings.ai_recommendation_target_results: break
-    books = _interleave_book_groups(grouped_books) if intent.kind == "recommend" else _dedupe_books_preserving_order([item for group in grouped_books for item in group])
-    authors = _dedupe_authors_preserving_order(all_authors)
-    if intent.kind=="recommend" and len(books)<settings.ai_recommendation_min_results:
-        await _edit_progress(progress,"Я не нашёл достаточно точных совпадений.")
-        if await send_smart_results(message, query, show_no_results=False):
-            return
-        await _send_weak_recommendation(message,query)
-        return
-    if books or authors:
-        label = ", ".join(candidate_queries)
-        if intent.kind == "recommend" and books:
-            selected=books[:settings.ai_recommendation_target_results]
-            await _edit_progress(progress, "Читаю аннотации для подборки…")
-            detailed=[]
-            for book in selected[:settings.ai_recommendation_max_details]:
-                try:
-                    detailed.append((book, await flibusta.details(book.book_id)))
-                except FlibustaError:
-                    continue
-            if detailed:
-                selected=[book for book,_ in detailed]
-                session=_create_search_session(message.from_user.id,message.chat.id,label,selected,title=_recommendation_text(query,len(selected)))
-                await _edit_progress(progress, "Собрал подборку.")
-                await message.answer(_recommendation_details_text(query,detailed),reply_markup=_search_results_keyboard(session))
-                return
-            session=_create_search_session(message.from_user.id,message.chat.id,label,selected,title=_recommendation_text(query,len(selected)))
-            await _edit_progress(progress, "Собрал подборку.")
-            await message.answer(_search_results_text(session),reply_markup=_search_results_keyboard(session))
-            return
-        if books and authors:
-            bs=_create_search_session(message.from_user.id,message.chat.id,label,books); aus=_create_author_session(message.from_user.id,message.chat.id,label,authors)
-            await _edit_progress(progress, "Нашёл несколько направлений.")
-            await message.answer(_combined_results_text(label,books,authors),reply_markup=_combined_results_keyboard(bs,aus))
-        elif books:
-            session=_create_search_session(message.from_user.id,message.chat.id,label,books,title=f"<b>Подобрал варианты</b>\nПо запросам: <b>{escape(label)}</b>")
-            await _edit_progress(progress, "Нашёл книги.")
-            await message.answer(_search_results_text(session),reply_markup=_search_results_keyboard(session))
-        else:
-            session=_create_author_session(message.from_user.id,message.chat.id,label,authors)
-            await _edit_progress(progress, "Нашёл авторов.")
-            await message.answer(_author_results_text(session),reply_markup=_author_results_keyboard(session))
-        return
-    await _edit_progress(progress, "Проверил варианты, но ничего подходящего не нашёл.")
-    if await send_smart_results(message, query, show_no_results=False):
-        return
-    await _send_no_results(message, query)
 
 
 async def telegram_retry(
@@ -1797,62 +1306,18 @@ async def _send_no_results(message: Message, query: str, *, progress: Message | 
         reply_markup=kb.as_markup(),
     )
 
-def _dedupe_books_preserving_order(items):
-    seen=set(); result=[]
-    for item in items:
-        key=(item.book_id, item.title, item.author)
-        if key not in seen: seen.add(key); result.append(item)
-    return result
-
-def _dedupe_authors_preserving_order(items):
-    seen=set(); result=[]
-    for item in items:
-        if item.author_id not in seen: seen.add(item.author_id); result.append(item)
-    return result
-
-def _interleave_book_groups(groups):
-    result=[]; seen=set(); width=max((len(g) for g in groups),default=0)
-    for index in range(width):
-        for group in groups:
-            if index >= len(group): continue
-            item=group[index]; key=(item.book_id,item.title,item.author)
-            if key not in seen: seen.add(key); result.append(item)
-    return result
-
-def _recommendation_fallback_queries(query:str)->list[str]:
-    q=_norm(query)
-    if "российск" in q and "постмодерн" in q: return ["Пелевин","Сорокин","Венедикт Ерофеев"]
-    if "зарубеж" in q and "постмодерн" in q: return ["Пол Остер","Харуки Мураками","Марк Данилевский"]
-    return []
-
-def _tavily_configured() -> bool:
-    return settings.discovery_web_active
-
 def _truncate(text: str, limit: int = 160) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
+
 def _intent_handler(kind: IntentKind) -> str:
     return {
-        IntentKind.EXACT_SEARCH: "send_smart_results",
-        IntentKind.AUTHOR_SEARCH: "send_author_results",
-        IntentKind.AUTHOR_TITLE_SEARCH: "send_author_title_results",
-        IntentKind.RECOMMENDATION: "send_ai_results",
-        IntentKind.DISCOVERY_OPTIONAL: "discovery_recommender",
-        IntentKind.UNKNOWN_FALLBACK: "fallback",
+        IntentKind.EXACT_SEARCH: "search",
+        IntentKind.AUTHOR_SEARCH: "author_search",
+        IntentKind.AUTHOR_TITLE_SEARCH: "author_title_search",
+        IntentKind.UNSUPPORTED_TOPIC: "unsupported_topic_help",
+        IntentKind.UNKNOWN_FALLBACK: "search",
     }[kind]
-
-async def _send_weak_recommendation(message:Message,query:str)->None:
-    sid=uuid4().hex[:10]; retry_sessions[sid]=query; _prune_sessions(retry_sessions)
-    kb=InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="Попробовать шире",callback_data=f"retry_wide:{sid}"))
-    kb.row(InlineKeyboardButton(text="Обычный поиск",callback_data=f"retry_book:{sid}"),InlineKeyboardButton(text="Искать авторов",callback_data=f"retry_author:{sid}"))
-    await message.answer("Я не нашёл достаточно точных совпадений. Могу попробовать шире или выполнить обычный поиск.",reply_markup=kb.as_markup())
-
-async def _edit_progress(message: Message, text: str) -> None:
-    try:
-        await telegram_retry(lambda: message.edit_text(text), attempts=2)
-    except Exception:
-        logger.debug("Could not edit AI progress message", exc_info=True)
 
 
 async def _send_or_edit(message: Message, progress, text: str, *, reply_markup=None) -> None:
@@ -1892,18 +1357,6 @@ async def _notify_admins_about_request(bot: Bot, user: User) -> None:
 
 
 
-def _assistant_ui_enabled() -> bool:
-    return settings.ai_enabled or settings.discovery_enabled
-
-def _assistant_bot_commands() -> list[BotCommand]:
-    commands = [BotCommand(command="recommend", description="подобрать книгу")]
-    if settings.discovery_enabled:
-        commands.extend([
-            BotCommand(command="discover", description="подборка с веб-поиском"),
-            BotCommand(command="discover_web", description="явный веб-поиск"),
-        ])
-    return commands
-
 async def setup_bot_commands(bot: Bot) -> None:
     if settings.ui_hide_command_menu_for_users and not settings.ui_show_power_user_commands:
         await bot.set_my_commands([], scope=BotCommandScopeDefault())
@@ -1918,7 +1371,7 @@ async def setup_bot_commands(bot: Bot) -> None:
 
 
 def _power_user_bot_commands() -> list[BotCommand]:
-    commands = [
+    return [
         BotCommand(command="start", description="открыть меню"),
         BotCommand(command="help", description="помощь"),
         BotCommand(command="search", description="поиск книг"),
@@ -1928,20 +1381,14 @@ def _power_user_bot_commands() -> list[BotCommand]:
         BotCommand(command="history", description="история"),
         BotCommand(command="last", description="последняя книга"),
     ]
-    if _assistant_ui_enabled():
-        commands.extend(_assistant_bot_commands())
-    return commands
 
 
 def _admin_bot_commands() -> list[BotCommand]:
-    commands = [
+    return [
         BotCommand(command="admin", description="админка"),
         BotCommand(command="admin_kindle_health", description="Kindle health"),
         BotCommand(command="admin_intent", description="проверить intent"),
     ]
-    if settings.discovery_enabled:
-        commands.append(BotCommand(command="admin_discovery_status", description="discovery status"))
-    return commands
 
 
 async def main() -> None:

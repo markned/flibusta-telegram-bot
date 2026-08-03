@@ -13,12 +13,11 @@
 - более осторожный smart search для неоднозначных запросов;
 - запоминание предпочитаемого формата пользователя в SQLite;
 - отправка книг на Kindle и PocketBook по e-mail через generic SMTP/Gmail;
-- опциональный AI-помощник для формулировки книжных запросов.
 
 
 ## Пользовательский интерфейс
 
-Обычным пользователям бот не показывает slash-команды в Telegram menu. Основной сценарий простой: человек пишет название, автора или настроение, а частые действия открывает кнопками. Команды остаются скрытыми техническими fallback-ручками и продолжают работать, если набрать их вручную.
+Обычным пользователям бот не показывает slash-команды в Telegram menu. Основной сценарий простой: человек пишет название книги, автора или оба сразу, а частые действия открывает кнопками. Команды остаются скрытыми техническими fallback-ручками и продолжают работать, если набрать их вручную.
 
 Главная нижняя клавиатура:
 - ⭐ Избранное
@@ -27,7 +26,7 @@
 - 📱 Читалки
 - ❓ Помощь
 
-Стартовый экран объясняет примеры запросов и даёт inline-кнопки для поиска, читалок, избранного, истории и помощи. Админские команды скрыты от обычных пользователей; при необходимости их можно включить только для админских чатов через `UI_SHOW_ADMIN_COMMANDS=true`. Для отладки compact command menu можно вернуть флагом `UI_SHOW_POWER_USER_COMMANDS=true`, но production default — пустое меню команд.
+Стартовый экран показывает примеры точного поиска и даёт inline-кнопки для поиска, читалок, избранного, истории и помощи. Админские команды скрыты от обычных пользователей; при необходимости их можно включить только для админских чатов через `UI_SHOW_ADMIN_COMMANDS=true`. Для отладки compact command menu можно вернуть флагом `UI_SHOW_POWER_USER_COMMANDS=true`, но production default — пустое меню команд.
 
 ## Надёжный поиск
 
@@ -172,33 +171,36 @@ Rate limits are intentionally small and boring: search is limited per minute in 
 При `ACCESS_CONTROL_ENABLED=true` новый пользователь не попадает в библиотеку сразу: `/start` создаёт запрос, а админ получает кнопки «Разрешить / Отклонить». Для доверенных людей можно создать deep-link командой `/invite`; состояние хранится в SQLite.
 
 В `/admin` есть быстрый обзор, заявки, список пользователей, блокировка/удаление, инвайты, статистика и очистка просроченного кэша.
-Для разбора маршрутизации без поиска есть `/admin_intent <запрос>`: команда показывает решение intent-router, но не вызывает AI, Tavily или Flibusta. Для неоднозначных фраз правило простое: AI/discovery лишь расширяют подборку, а детерминированный поиск остаётся запасным контуром.
 
-## AI assistant
+Для разбора маршрутизации без сетевого запроса есть `/admin_intent <запрос>`: команда показывает решение intent-router и не обращается к Flibusta.
 
-AI-рекомендации — best-effort enhancement поверх обычного поиска. Точные запросы сначала обрабатываются детерминированно; если AI недоступен или даёт слабый план, бот сохраняет обычный поиск. По умолчанию AI выключен; для включения нужны `AI_ENABLED=true` и `OPENAI_API_KEY`.
+## Поиск: устройство и ограничения
 
-Настройки recommendation budget: `AI_INTENT_CACHE_TTL_SECONDS`, `AI_RECOMMENDATION_MAX_QUERIES_USED`, `AI_RECOMMENDATION_TARGET_RESULTS`, `AI_RECOMMENDATION_MIN_RESULTS`, `AI_RECOMMENDATION_MAX_DETAILS`, `AI_RECOMMENDATION_BOOKS_PER_QUERY`.
+Поиск полностью детерминированный — AI, Tavily и подборки удалены. Один `SearchService` обрабатывает название, автора и пару «название + автор», поэтому запрос не уходит в несколько конкурирующих веток и не создаёт дублирующиеся ответы.
+
+- `исповедь толстой` и `толстой исповедь` ищутся регистронезависимо;
+- случайная английская раскладка вроде `l.yf` получает один безопасный вариант `дуна`;
+- книги и авторы запрашиваются параллельно, а частичный ответ сохраняется при сбое одной ветки;
+- весь поиск ограничен `SEARCH_TOTAL_TIMEOUT_SECONDS`;
+- число укороченных вариантов ограничено `SEARCH_FALLBACK_MAX_QUERIES`;
+- свежий SQLite-кэш ускоряет повторные запросы, а устаревший кэш может спасти выдачу при временном сбое Flibusta;
+- circuit breaker на короткое время прекращает бесполезные обращения после серии ошибок.
+
+Жанровые и рекомендательные фразы не выдаются за точный поиск. Бот просит написать конкретное название или автора. Старые `AI_*`, `OPENAI_*`, `DISCOVERY_*`, `RECOMMENDATION_CONFIRMATION_*` и `LITERARY_*` переменные больше не используются; при плавном обновлении они безопасно игнорируются, но их следует удалить из `.env`.
+
+Новые настройки надёжности:
+
+```env
+CACHE_STALE_IF_ERROR_SECONDS=604800
+FLIBUSTA_CIRCUIT_BREAKER_FAILURES=3
+FLIBUSTA_CIRCUIT_BREAKER_COOLDOWN_SECONDS=30
+```
 
 ### Operational troubleshooting
-- AI disabled: exact search, author search, downloads, Kindle, favorites, and history still work.
-- Web discovery disabled: broad recommendations fall back to model/local search and then deterministic search.
-- SMTP auth failed: check the selected SMTP provider credentials; Gmail requires an app password.
-- Kindle mail missing: approve `SMTP_FROM_EMAIL` in Amazon Personal Document settings.
-- File too large: try a smaller format; the default e-mail-safe limit is 28 MB.
-- Hosting on Oracle is fine: delivery leaves through the configured SMTP provider.
 
-## Web discovery with Tavily
-
-`/recommend` делает дешёвую локальную/модельную подборку. `/discover` может добавить Tavily, если включены `DISCOVERY_USE_WEB=true`, `DISCOVERY_WEB_PROVIDER=tavily` и ключ передан только через `DISCOVERY_WEB_API_KEY`; `/discover_web` явно просит веб-подборку. Финальный список всё равно проходит через Flibusta: бот показывает только книги с реальным `book_id` из каталога.
-
-Веб-поиск кэшируется и ограничен дневными лимитами, а консервативные caps держат нагрузку подходящей для маленького VPS. `.env` не коммитится; ключ Tavily нельзя добавлять в код, README или логи.
-Точные названия, авторы и пары «автор + название» не вызывают Tavily вовсе.
-
-Главные настройки: `DISCOVERY_ENABLED`, `DISCOVERY_USE_WEB`, `DISCOVERY_WEB_PROVIDER`, `DISCOVERY_WEB_API_KEY`, `DISCOVERY_MAX_WEB_RESULTS`, `DISCOVERY_MAX_BOOK_IDEAS`, `DISCOVERY_MAX_FLIBUSTA_CHECKS`, `DISCOVERY_MAX_FINAL_RESULTS`, `DISCOVERY_CACHE_TTL_SECONDS`, `DISCOVERY_USER_DAILY_LIMIT`, `DISCOVERY_GLOBAL_DAILY_LIMIT`.
-
-### Recommendation confirmation
-
-Свободный текст по-прежнему маршрутизируется автоматически. Точный поиск и запросы «автор + название» выполняются сразу; широкие просьбы о подборке сначала получают короткое подтверждение, и только после него запускают model/web discovery. Это удерживает дорогие запросы под контролем и не заставляет пользователя выбирать режим вручную. Темы для взрослых обрабатываются как обычный поиск книг, без лишних предупреждений и без превращения ответа в практическую инструкцию.
-
-Поиск пар «название + автор» регистронезависимый: `исповедь толстой` и `толстой исповедь` обрабатываются так же, как версии с заглавными буквами. Для будущих легальных книжных каталогов оставлен отключённый provider abstraction; сейчас используются Tavily discovery и проверка наличия в Flibusta.
+- Flibusta отвечает медленно: бот остановит запрос по общему таймауту и предложит повторить позже.
+- Flibusta временно недоступна: при наличии используется недавний устаревший кэш.
+- SMTP auth failed: проверь данные выбранного SMTP-провайдера; Gmail требует app password.
+- Kindle mail missing: добавь `SMTP_FROM_EMAIL` в Amazon Personal Document settings.
+- File too large: попробуй меньший формат; безопасный e-mail лимит по умолчанию — 28 МБ.
+- Oracle подходит для хостинга: доставка уходит через настроенный SMTP.
