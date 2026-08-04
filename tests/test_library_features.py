@@ -219,6 +219,9 @@ def test_send_search_results_sends_message(monkeypatch):
     message = _FakeMessage()
     run(main.send_search_results(message, "мастер и маргарита"))
     assert any("Нашёл книги" in text for text, _ in message.answers + message.edit_payloads)
+    progress_markup = message.answers[0][1]["reply_markup"]
+    progress_labels = [button.text for row in progress_markup.keyboard for button in row]
+    assert "📱 Читалки" in progress_labels and "⚙️ Kindle" not in progress_labels
 
 
 def test_text_routing_uses_single_search_entrypoint(monkeypatch):

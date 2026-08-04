@@ -980,7 +980,9 @@ async def send_search_results(message: Message, query: str) -> None:
         await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
         return
     started_at = monotonic()
-    progress = await telegram_retry(lambda: message.answer("🔎 Ищу книгу…"), attempts=2)
+    progress = await telegram_retry(
+        lambda: message.answer("🔎 Ищу книгу…", reply_markup=_reply_keyboard()), attempts=2
+    )
     log_user_action(message.from_user, message.chat.id, "search_start", query=query)
     try:
         outcome = await search_service.search_books(query)
@@ -997,7 +999,12 @@ async def send_search_results(message: Message, query: str) -> None:
 
 
 async def send_author_title_results(message: Message, author: str, title: str) -> bool:
-    progress = await telegram_retry(lambda: message.answer("🔎 Ищу книгу и проверяю автора…"), attempts=2)
+    progress = await telegram_retry(
+        lambda: message.answer(
+            "🔎 Ищу книгу и проверяю автора…", reply_markup=_reply_keyboard()
+        ),
+        attempts=2,
+    )
     try:
         outcome = await search_service.search_author_title(author, title)
     except (FlibustaError, TimeoutError):
@@ -1038,7 +1045,9 @@ async def send_author_results(message: Message, query: str, *, show_no_results: 
         await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
         return False
     started_at = monotonic()
-    progress = await telegram_retry(lambda: message.answer("🔎 Ищу автора…"), attempts=2)
+    progress = await telegram_retry(
+        lambda: message.answer("🔎 Ищу автора…", reply_markup=_reply_keyboard()), attempts=2
+    )
     log_user_action(message.from_user, message.chat.id, "author_search_start", query=query)
     try:
         outcome = await search_service.search_author(query)
@@ -1072,7 +1081,10 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
         await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
         return False
     started_at = monotonic()
-    progress = await telegram_retry(lambda: message.answer("🔎 Ищу в библиотеке…"), attempts=2)
+    progress = await telegram_retry(
+        lambda: message.answer("🔎 Ищу в библиотеке…", reply_markup=_reply_keyboard()),
+        attempts=2,
+    )
     log_user_action(message.from_user, message.chat.id, "smart_search_start", query=query)
     try:
         await telegram_retry(lambda: message.bot.send_chat_action(message.chat.id, ChatAction.TYPING), attempts=2)
