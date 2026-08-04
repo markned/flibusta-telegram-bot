@@ -17,6 +17,7 @@ REMOVED_PREFIXES = (
     "RECOMMENDATION_CONFIRMATION_",
     "LITERARY_",
 )
+REMOVED_KEYS = {"UI_HOME_INLINE_BUTTONS"}
 
 # Conservative values for the current ~1 GB VPS. Only operational knobs are
 # managed here; tokens, SMTP credentials, addresses and admin IDs are preserved.
@@ -41,7 +42,6 @@ MANAGED_VALUES = {
     "UI_HIDE_COMMAND_MENU_FOR_USERS": "true",
     "UI_SHOW_ADMIN_COMMANDS": "false",
     "UI_SHOW_POWER_USER_COMMANDS": "false",
-    "UI_HOME_INLINE_BUTTONS": "true",
     "UI_REPLY_KEYBOARD_ENABLED": "true",
 }
 
@@ -81,7 +81,7 @@ def normalize_env(path: Path) -> tuple[int, int]:
             continue
 
         key = raw_line.split("=", 1)[0].strip()
-        if key.startswith(REMOVED_PREFIXES):
+        if key.startswith(REMOVED_PREFIXES) or key in REMOVED_KEYS:
             removed += 1
             continue
         if key in MANAGED_VALUES:

@@ -345,6 +345,26 @@ def test_start_help_and_home_describe_deterministic_search(monkeypatch):
     assert "антиутопия" not in text.lower()
 
 
+def test_home_uses_one_persistent_menu_without_inline_duplicates(monkeypatch):
+    import app.main as main
+
+    monkeypatch.setattr(main.settings, "ui_reply_keyboard_enabled", True)
+    message = _FakeMessage()
+    run(main.send_home(message))
+    assert len(message.answers) == 1
+    markup = message.answers[0][1]["reply_markup"]
+    labels = [button.text for row in markup.keyboard for button in row]
+    assert labels == ["⭐ Избранное", "🕘 История", "📚 Последняя", "📱 Читалки", "❓ Помощь"]
+    assert not hasattr(markup, "inline_keyboard")
+
+
+def test_help_only_has_contextual_back_button():
+    from app.ui.home import help_keyboard
+
+    labels = [button.text for row in help_keyboard().inline_keyboard for button in row]
+    assert labels == ["🏠 В меню"]
+
+
 def _book_details_for_card(annotation="Short", cover_url=None):
     from app.flibusta import BookDetails, DownloadFormat
 

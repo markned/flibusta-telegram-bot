@@ -91,7 +91,6 @@ from app.ui.home import (
     back_home_keyboard,
     help_keyboard,
     help_text,
-    home_keyboard,
     home_text,
     search_help_text,
 )
@@ -223,22 +222,8 @@ def _reply_keyboard():
     return main_reply_keyboard() if settings.ui_reply_keyboard_enabled else None
 
 
-def _home_inline_keyboard():
-    return home_keyboard() if settings.ui_home_inline_buttons else None
-
-
 async def send_home(message: Message) -> None:
-    if not settings.ui_home_inline_buttons:
-        await telegram_retry(lambda: message.answer(home_text(), reply_markup=_reply_keyboard()))
-        return
-    await telegram_retry(
-        lambda: message.answer(
-            home_text(),
-            reply_markup=_home_inline_keyboard(),
-        )
-    )
-    if settings.ui_reply_keyboard_enabled:
-        await telegram_retry(lambda: message.answer("Главное меню — внизу.", reply_markup=main_reply_keyboard()), attempts=1)
+    await telegram_retry(lambda: message.answer(home_text(), reply_markup=_reply_keyboard()))
 
 
 async def send_help(message: Message) -> None:
@@ -366,10 +351,7 @@ async def home_last(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "home")
 async def home_callback(callback: CallbackQuery) -> None:
     await callback_answer(callback)
-    try:
-        await callback.message.edit_text(home_text(), reply_markup=_home_inline_keyboard())
-    except TelegramBadRequest:
-        await send_home(callback.message)
+    await send_home(callback.message)
 
 
 @router.callback_query(F.data == "home_help")

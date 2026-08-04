@@ -16,21 +16,6 @@ def home_text() -> str:
     )
 
 
-def home_keyboard():
-    kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="🔎 Как искать", callback_data="home_search_help"))
-    kb.row(
-        InlineKeyboardButton(text="⭐ Избранное", callback_data="home_favorites"),
-        InlineKeyboardButton(text="🕘 История", callback_data="home_history"),
-    )
-    kb.row(
-        InlineKeyboardButton(text="📚 Последняя книга", callback_data="home_last"),
-        InlineKeyboardButton(text="📱 Читалки", callback_data="readers_home"),
-    )
-    kb.row(InlineKeyboardButton(text="❓ Помощь", callback_data="home_help"))
-    return kb.as_markup()
-
-
 def help_text() -> str:
     return (
         "<b>Как пользоваться</b>\n\n"
@@ -52,8 +37,6 @@ def help_text() -> str:
 
 def help_keyboard():
     kb = InlineKeyboardBuilder()
-    kb.row(InlineKeyboardButton(text="📱 Читалки", callback_data="readers_home"))
-    kb.row(InlineKeyboardButton(text="⭐ Избранное", callback_data="home_favorites"))
     kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
     return kb.as_markup()
 

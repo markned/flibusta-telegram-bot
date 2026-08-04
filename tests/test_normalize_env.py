@@ -10,6 +10,7 @@ def test_normalizer_removes_legacy_ai_and_preserves_secrets(tmp_path: Path):
         "SMTP_PASSWORD=keep-password\n"
         "OPENAI_API_KEY=remove-me\n"
         "DISCOVERY_WEB_API_KEY=remove-me-too\n"
+        "UI_HOME_INLINE_BUTTONS=true\n"
         "SEARCH_TOTAL_TIMEOUT_SECONDS=99\n"
         "SEARCH_TOTAL_TIMEOUT_SECONDS=88\n",
         encoding="utf-8",
@@ -23,6 +24,7 @@ def test_normalizer_removes_legacy_ai_and_preserves_secrets(tmp_path: Path):
     assert "TELEGRAM_BOT_TOKEN=keep-token" in result
     assert "SMTP_PASSWORD=keep-password" in result
     assert "remove-me" not in result
+    assert "UI_HOME_INLINE_BUTTONS" not in result
     assert result.count("SEARCH_TOTAL_TIMEOUT_SECONDS=") == 1
     assert "SEARCH_TOTAL_TIMEOUT_SECONDS=12" in result
     assert (tmp_path / ".env.backup").is_file()
