@@ -1,4 +1,5 @@
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.flibusta import AuthorResult, SearchResult
@@ -6,6 +7,7 @@ from app.repositories.access import AccessRepository
 from app.repositories.cache import CacheRepository
 from app.repositories.db import Database
 from app.repositories.download_history import DownloadHistoryRepository
+from app.repositories.download_history import DownloadHistoryItem
 from app.repositories.favorites import FavoritesRepository
 from app.repositories.last_books import LastBooksRepository
 from app.services.cached_flibusta import CachedFlibustaClient
@@ -366,6 +368,63 @@ def test_help_only_has_contextual_back_button():
 
     labels = [button.text for row in help_keyboard().inline_keyboard for button in row]
     assert labels == ["🏠 В меню"]
+
+
+def _history_item(
+    item_id: int,
+    book_id: str,
+    title: str,
+    *,
+    target: str = "telegram",
+    status: str = "sent",
+    error: str | None = None,
+) -> DownloadHistoryItem:
+    return DownloadHistoryItem(
+        id=item_id,
+        user_id=501,
+        book_id=book_id,
+        title=title,
+        author="Автор",
+        format="epub",
+        filename=f"{book_id}.epub",
+        file_size_bytes=1024,
+        delivery_target=target,
+        status=status,
+        created_at="2026-08-04T10:30:00+00:00",
+        error=error,
+    )
+
+
+def test_history_is_friendly_and_books_open_from_buttons():
+    from app.ui.library import history_keyboard, history_text
+
+    items = [
+        _history_item(1, "10", "Первая книга"),
+        _history_item(2, "20", "Вторая книга", target="kindle"),
+    ]
+    text = history_text(items, now=datetime(2026, 8, 4, 12, tzinfo=UTC))
+    assert "История книг" in text
+    assert "Сегодня, 10:30" in text
+    assert "в Telegram" in text and "в Kindle" in text
+    markup = history_keyboard(items)
+    callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+    assert "book:10" in callbacks and "book:20" in callbacks
+    assert "history_failed" in callbacks and "home" in callbacks
+
+
+def test_failed_history_hides_raw_technical_error():
+    from app.ui.library import history_text
+
+    item = _history_item(
+        1,
+        "10",
+        "Книга",
+        status="failed",
+        error="SMTPAuthenticationError password=never-show-this",
+    )
+    text = history_text([item], failed=True)
+    assert "сервис отправки временно недоступен" in text
+    assert "never-show-this" not in text
 
 
 def _book_details_for_card(annotation="Short", cover_url=None):

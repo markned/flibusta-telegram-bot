@@ -83,6 +83,7 @@ from app.ui.library import (
     combined_results_text as _combined_results_text,
     formats_keyboard as render_formats_keyboard,
     history_text as _history_text,
+    history_keyboard as _history_keyboard,
     main_reply_keyboard,
     search_results_keyboard as _search_results_keyboard,
     search_results_text as _search_results_text,
@@ -337,6 +338,12 @@ async def home_history(callback: CallbackQuery) -> None:
     await callback_answer(callback)
     await _send_history_message(callback.message, callback.from_user.id)
 
+
+@router.callback_query(F.data == "history_failed")
+async def failed_history_callback(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    await _send_history_message(callback.message, callback.from_user.id, failed=True)
+
 @router.message(Command("last"))
 async def last_command(message: Message) -> None:
     await _send_last_message(message, message.from_user.id)
@@ -374,7 +381,10 @@ async def search_help_callback(callback: CallbackQuery) -> None:
 
 async def _send_history_message(message: Message, user_id: int, *, failed: bool = False) -> None:
     items = await download_history_repo.recent(user_id, status="failed" if failed else "sent")
-    await message.answer(_history_text(items, failed=failed), reply_markup=back_home_keyboard())
+    await message.answer(
+        _history_text(items, failed=failed),
+        reply_markup=_history_keyboard(items, failed=failed),
+    )
 
 
 async def _send_last_message(message: Message, user_id: int) -> None:

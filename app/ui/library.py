@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import UTC, datetime, timedelta
 from html import escape
 from aiogram.types import InlineKeyboardButton, KeyboardButton, ReplyKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
@@ -85,8 +86,93 @@ def formats_keyboard(details:BookDetails,preferred_format:str|None,is_favorite:b
  return kb.as_markup()
 def main_reply_keyboard():
  return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='⭐ Избранное'),KeyboardButton(text='🕘 История')],[KeyboardButton(text='📚 Последняя'),KeyboardButton(text='📱 Читалки')],[KeyboardButton(text='❓ Помощь')]],resize_keyboard=True,is_persistent=True,input_field_placeholder='Название книги или автор')
-def history_text(items:list[DownloadHistoryItem],failed:bool=False)->str:
- if not items:return '<b>Неудачные отправки</b>\n\nПока пусто.' if failed else '<b>История</b>\n\nПока пусто.'
- lines=['<b>Неудачные отправки</b>' if failed else '<b>История</b>']
- for item in items: lines.append(f"{item.created_at[:16]} — {item.title or item.book_id} [{item.format}] → {item.delivery_target}"+(f' ({item.error})' if failed and item.error else ''))
- return '\n'.join(lines)
+def history_text(
+    items: list[DownloadHistoryItem],
+    failed: bool = False,
+    *,
+    now: datetime | None = None,
+) -> str:
+    heading = "<b>Неудачные отправки</b>" if failed else "<b>История книг</b>"
+    if not items:
+        suffix = "Здесь появятся книги, которые не удалось отправить." if failed else "Здесь появятся скачанные и отправленные книги."
+        return f"{heading}\n\nПока пусто. {suffix}"
+
+    lines = [
+        heading,
+        "Последние неудачные попытки:" if failed else "Последние скачанные и отправленные книги:",
+    ]
+    for index, item in enumerate(items, start=1):
+        title = escape(item.title or "Книга без названия")
+        author = escape(item.author or "Автор не указан")
+        when = _friendly_history_date(item.created_at, now=now)
+        action = _history_action(item.delivery_target, failed=failed)
+        details = f"{when} · {escape(item.format.upper())} · {action}"
+        lines.append(f"<b>{index}. {title}</b>\n{author}\n{details}")
+        if failed:
+            lines.append(f"Причина: {_friendly_history_error(item.error)}")
+    lines.append("Нажми название ниже, чтобы снова открыть карточку книги.")
+    return "\n\n".join(lines)
+
+
+def history_keyboard(items: list[DownloadHistoryItem], failed: bool = False):
+    kb = InlineKeyboardBuilder()
+    seen: set[str] = set()
+    for item in items:
+        if not item.book_id or item.book_id in seen:
+            continue
+        seen.add(item.book_id)
+        label = f"📖 {item.title or 'Открыть книгу'}"
+        kb.row(
+            InlineKeyboardButton(
+                text=label[:64],
+                callback_data=f"book:{item.book_id}",
+            )
+        )
+    if failed:
+        kb.row(InlineKeyboardButton(text="✅ Успешные", callback_data="home_history"))
+    else:
+        kb.row(InlineKeyboardButton(text="⚠️ Неудачные", callback_data="history_failed"))
+    kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
+    return kb.as_markup()
+
+
+def _friendly_history_date(value: str, *, now: datetime | None = None) -> str:
+    try:
+        created = datetime.fromisoformat(value)
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+    except (TypeError, ValueError):
+        return "Дата неизвестна"
+    current = now or datetime.now(UTC)
+    current = current.astimezone(created.tzinfo)
+    if created.date() == current.date():
+        day = "Сегодня"
+    elif created.date() == (current - timedelta(days=1)).date():
+        day = "Вчера"
+    else:
+        day = created.strftime("%d.%m.%Y")
+    return f"{day}, {created.strftime('%H:%M')}"
+
+
+def _history_action(target: str, *, failed: bool) -> str:
+    labels = {
+        "telegram": "Telegram",
+        "kindle": "Kindle",
+        "pocketbook": "PocketBook",
+    }
+    destination = labels.get((target or "").casefold(), "читалка")
+    verb = "не отправлено в" if failed else "в"
+    return f"{verb} {destination}"
+
+
+def _friendly_history_error(error: str | None) -> str:
+    normalized = (error or "").casefold()
+    if "too_large" in normalized or "too large" in normalized or "слишком" in normalized:
+        return "файл оказался слишком большим"
+    if "recipient" in normalized or "sender" in normalized or "address" in normalized:
+        return "проверь адрес читалки и разрешённого отправителя"
+    if "auth" in normalized or "config" in normalized:
+        return "сервис отправки временно недоступен"
+    if "telegram upload" in normalized:
+        return "Telegram не принял файл"
+    return "не удалось завершить отправку"
