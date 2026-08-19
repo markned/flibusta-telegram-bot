@@ -187,7 +187,8 @@ def test_email_sender_builds_message_with_attachment(monkeypatch) -> None:
         )
     )
     assert captured["message"]["To"] == "reader@kindle.com"
-    assert "private library bot" in captured["message"].get_body(preferencelist=("plain",)).get_content()
+    assert "Полку" in captured["message"].get_body(preferencelist=("plain",)).get_content()
+    assert str(captured["message"]["From"]).startswith("Полка <")
     assert captured["message"].iter_attachments().__next__().get_filename() == "book.epub"
     assert captured["kwargs"]["start_tls"] is True
 

@@ -4,6 +4,7 @@ from html import escape
 from urllib.parse import quote_plus
 
 from app.flibusta import AuthorResult, BookDetails, SearchResult
+from app.branding import BRAND_NAME
 from app.web.device import DeviceProfile
 
 
@@ -47,7 +48,7 @@ def page(title: str, body: str, *, authenticated: bool = False) -> str:
             '<a href="/">Поиск</a><span class="nav-separator">·</span>'
             '<a href="/favorites">Избранное</a><span class="nav-separator">·</span>'
             '<a href="/history">История</a><span class="nav-separator">·</span>'
-            '<a href="/readers">Читалки</a>'
+            '<a href="/readers">Мои устройства</a>'
             "</nav>"
         )
     return (
@@ -55,7 +56,7 @@ def page(title: str, body: str, *, authenticated: bool = False) -> str:
         '<meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{escape(title)}</title><style>{BASE_CSS}</style></head><body><main>"
-        f"<header><h1><a href=\"/\">Библиотека им. Недзвецких</a></h1>{nav}</header>"
+        f"<header><h1><a href=\"/\">{escape(BRAND_NAME)}</a></h1>{nav}</header>"
         f"{body}<footer>Книги не хранятся на сервере постоянно.</footer></main></body></html>"
     )
 
@@ -64,8 +65,8 @@ def login_page(message: str | None = None) -> str:
     notice = f'<div class="notice">{escape(message)}</div>' if message else ""
     return page(
         "Вход",
-        "<h2>Вход в библиотеку</h2>"
-        "<p>Открой в Telegram раздел <b>Читалки → Веб-библиотека</b> и получи короткий код.</p>"
+        f"<h2>{escape(BRAND_NAME)} — вход</h2>"
+        "<p>Открой в Telegram раздел <b>Мои устройства → Веб-версия</b> и получи короткий код.</p>"
         f"{notice}"
         '<form method="post" action="/pair">'
         '<label for="code">Код доступа</label>'
@@ -75,15 +76,19 @@ def login_page(message: str | None = None) -> str:
     )
 
 
-def home_page(*, notice: str | None = None) -> str:
+def home_page(*, notice: str | None = None, recent_books: list[SearchResult] | None = None) -> str:
     notice_html = f'<div class="notice">{escape(notice)}</div>' if notice else ""
+    recent_html = ""
+    if recent_books:
+        recent_html = "<h2>Недавние книги</h2>" + book_list(recent_books[:6])
     return page(
         "Поиск книг",
         f"{notice_html}<h2>Найти книгу</h2>"
         '<form method="get" action="/search">'
         '<input name="q" type="search" placeholder="Название книги или автор" required autofocus>'
         '<p><button class="primary" type="submit">Искать</button></p></form>'
-        '<p class="muted">Например: «Дюна», «Пелевин» или «исповедь толстой».</p>',
+        '<p class="muted">Например: «Дюна», «Пелевин» или «исповедь толстой».</p>'
+        f"{recent_html}",
         authenticated=True,
     )
 
@@ -143,11 +148,13 @@ def book_page(
     kindle_configured: bool,
     pocketbook_configured: bool,
     notice: str | None = None,
+    cover_url: str | None = None,
 ) -> str:
     notice_html = f'<div class="notice">{escape(notice)}</div>' if notice else ""
     cover = ""
-    if details.cover_url and details.cover_url.startswith(("http://", "https://")):
-        cover = f'<img class="cover" src="{escape(details.cover_url, quote=True)}" alt="Обложка">'
+    effective_cover_url = details.cover_url if cover_url is None else cover_url
+    if effective_cover_url and effective_cover_url.startswith(("/", "http://", "https://")):
+        cover = f'<img class="cover" src="{escape(effective_cover_url, quote=True)}" alt="Обложка">'
     authors = ", ".join(details.authors) or "Автор не указан"
     metadata = []
     if details.genres:
@@ -218,12 +225,25 @@ def readers_page(*, kindle: str | None, pocketbook: str | None) -> str:
         return f'<article class="card"><b>{escape(label)}</b><div>{escape(value or "не настроен")}</div></article>'
 
     return page(
-        "Читалки",
-        "<h2>Мои читалки</h2>"
+        "Мои устройства",
+        "<h2>Мои устройства</h2>"
         f"{state('Kindle', kindle)}{state('PocketBook', pocketbook)}"
         '<p class="muted">Адреса и формат меняются в Telegram. Здесь можно искать, скачивать и отправлять книги.</p>'
         '<h2>Доступ</h2>'
         '<form method="post" action="/logout"><button type="submit">Выйти на этом устройстве</button></form>',
+        authenticated=True,
+    )
+
+
+def delivery_success_page(details: BookDetails, *, provider: str) -> str:
+    label = "PocketBook" if provider == "pocketbook" else "Kindle"
+    return page(
+        "Книга отправляется",
+        '<div class="notice"><h2>Готово</h2>'
+        f'<p><b>{escape(details.title)}</b> добавлена в очередь отправки на {escape(label)}.</p>'
+        '<p>Обычно книга появляется на устройстве через несколько минут.</p></div>'
+        f'<p><a class="button primary" href="/book/{quote_plus(details.book_id)}">Вернуться к книге</a></p>'
+        '<p><a class="button" href="/">На главную</a></p>',
         authenticated=True,
     )
 

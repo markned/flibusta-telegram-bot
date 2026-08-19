@@ -110,6 +110,26 @@ def test_missing_cover_never_renders_image() -> None:
     assert '<img class="cover"' not in html
 
 
+def test_book_page_can_use_local_cover_proxy() -> None:
+    html = ui.book_page(
+        _details(),
+        device=DESKTOP,
+        favorite=False,
+        kindle_configured=False,
+        pocketbook_configured=False,
+        cover_url="/cover/10",
+    )
+    assert 'src="/cover/10"' in html
+    assert "img.example" not in html
+
+
+def test_delivery_success_page_is_clear_and_compact() -> None:
+    html = ui.delivery_success_page(_details(), provider="kindle")
+    assert "Готово" in html
+    assert "Дюна" in html
+    assert "Kindle" in html
+
+
 def test_css_avoids_flex_and_min_function_for_old_reader_browsers() -> None:
     assert "display: flex" not in ui.BASE_CSS
     assert "width: min(" not in ui.BASE_CSS

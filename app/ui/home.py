@@ -3,10 +3,12 @@ from __future__ import annotations
 from aiogram.types import InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.branding import BRAND_NAME
+
 
 def home_text() -> str:
     return (
-        "<b>Библиотека им. Недзвецких</b>\n\n"
+        f"<b>{BRAND_NAME}</b>\n\n"
         "Напиши название книги, автора или название и автора вместе.\n\n"
         "<b>Примеры:</b>\n"
         "• Дюна\n"
@@ -32,7 +34,7 @@ def help_text() -> str:
         "• скачать файл\n"
         "• отправить на Kindle или PocketBook\n"
         "• добавить в избранное\n\n"
-        "В разделе «Читалки» можно получить код для входа в веб-библиотеку."
+        "В разделе «Мои устройства» можно получить код для входа в веб-версию."
     )
 
 

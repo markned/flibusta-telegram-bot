@@ -192,6 +192,37 @@ def test_book_ranking_prefers_full_token_match() -> None:
     assert ranked[0].book_id == "best"
 
 
+def test_duplicate_editions_are_collapsed_and_clean_copy_wins() -> None:
+    results = [
+        SearchResult("litres", "1984 [litres с оптимизированной обложкой]", "Джордж Оруэлл"),
+        SearchResult("clean", "1984", "Джордж Оруэлл"),
+        SearchResult("other", "1984", "Другой автор"),
+    ]
+    ranked = rank_and_dedupe_books(results, "1984")
+    assert [item.book_id for item in ranked] == ["clean", "other"]
+
+
+def test_search_continues_with_bounded_fallback_after_primary_failure() -> None:
+    class Client:
+        def __init__(self):
+            self.queries = []
+
+        async def search(self, query, limit):
+            self.queries.append(query)
+            if query == "книга Дюна":
+                raise TimeoutError
+            return [SearchResult("dune", "Дюна", "Фрэнк Герберт")]
+
+        async def search_authors(self, query, limit):
+            return []
+
+    client = Client()
+    service = SearchService(client, book_limit=10, author_limit=10, max_fallback_queries=2)
+    result = run(service.search("книга Дюна"))
+    assert result.books[0].book_id == "dune"
+    assert client.queries == ["книга Дюна", "Дюна"]
+
+
 def test_keyboard_layout_correction_is_bounded() -> None:
     assert correct_keyboard_layout("l.yf") == "дюна"
     plan = build_search_plan("l.yf")

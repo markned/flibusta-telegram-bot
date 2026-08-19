@@ -85,7 +85,7 @@ def formats_keyboard(details:BookDetails,preferred_format:str|None,is_favorite:b
  if details.annotation and len(details.annotation)>annotation_max_chars: kb.row(InlineKeyboardButton(text='📖 Описание полностью',callback_data=f'annotation:{details.book_id}'))
  return kb.as_markup()
 def main_reply_keyboard():
- return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='⭐ Избранное'),KeyboardButton(text='🕘 История')],[KeyboardButton(text='📚 Последняя'),KeyboardButton(text='📱 Читалки')],[KeyboardButton(text='❓ Помощь')]],resize_keyboard=True,is_persistent=True,input_field_placeholder='Название книги или автор')
+ return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='⭐ Избранное'),KeyboardButton(text='🕘 История')],[KeyboardButton(text='📚 Последняя'),KeyboardButton(text='📱 Мои устройства')],[KeyboardButton(text='❓ Помощь')]],resize_keyboard=True,is_persistent=True,input_field_placeholder='Название книги или автор')
 def history_text(
     items: list[DownloadHistoryItem],
     failed: bool = False,

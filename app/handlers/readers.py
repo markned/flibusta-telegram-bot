@@ -41,10 +41,10 @@ def build_readers_router(
     async def send_readers_home(message: Message, user_id: int) -> None:
         kindle = await kindle_settings_repo.get(user_id)
         pocketbook = await reader_settings_repo.get(user_id, "pocketbook")
-        lines = ["<b>Мои читалки</b>", ""]
+        lines = ["<b>Мои устройства</b>", ""]
         lines.append(f"Kindle: {'✅ настроен' if kindle else 'не настроен'}")
         lines.append(f"PocketBook: {'✅ настроен' if pocketbook else 'не настроен'}")
-        lines.extend(("", "Настрой читалку один раз, затем отправляй книги прямо из карточки."))
+        lines.extend(("", "Настрой устройство один раз, затем отправляй книги прямо из карточки."))
         await message.answer("\n".join(lines), reply_markup=_readers_keyboard(web_enabled))
 
     async def send_pocketbook_home(message: Message, user_id: int) -> None:
@@ -55,7 +55,7 @@ def build_readers_router(
         )
 
     @router.message(Command("readers"))
-    @router.message(F.text == "📱 Читалки")
+    @router.message(F.text.in_({"📱 Мои устройства", "📱 Читалки"}))
     async def readers_home_message(message: Message) -> None:
         await send_readers_home(message, message.from_user.id)
 
@@ -296,7 +296,7 @@ def _pocketbook_home_keyboard(settings: ReaderSettings | None):
         kb.row(InlineKeyboardButton(text="🧪 Тест", callback_data="pocketbook_test"))
         kb.row(InlineKeyboardButton(text="🕘 История", callback_data="pocketbook_history"))
         kb.row(InlineKeyboardButton(text="🗑 Удалить адрес", callback_data="pocketbook_remove"))
-    kb.row(InlineKeyboardButton(text="← Мои читалки", callback_data="readers_home"))
+    kb.row(InlineKeyboardButton(text="← Мои устройства", callback_data="readers_home"))
     kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
     return kb.as_markup()
 

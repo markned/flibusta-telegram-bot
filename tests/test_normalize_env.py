@@ -26,7 +26,8 @@ def test_normalizer_removes_legacy_ai_and_preserves_secrets(tmp_path: Path):
     assert "remove-me" not in result
     assert "UI_HOME_INLINE_BUTTONS" not in result
     assert result.count("SEARCH_TOTAL_TIMEOUT_SECONDS=") == 1
-    assert "SEARCH_TOTAL_TIMEOUT_SECONDS=12" in result
+    assert "SEARCH_TOTAL_TIMEOUT_SECONDS=35" in result
+    assert "SEARCH_SOURCE_TIMEOUT_SECONDS=25" in result
     assert "WEB_ENABLED=true" in result
     assert "WEB_PUBLIC_URL=https://books.technique.ink" in result
     assert "WEB_AUTH_SECRET=" in result

@@ -132,7 +132,7 @@ def test_web_shell_login_search_book_download_and_send(tmp_path: Path) -> None:
         await client.start_server()
         try:
             login = await client.get("/")
-            assert "Вход в библиотеку" in await login.text()
+            assert "Полка — вход" in await login.text()
 
             paired = await client.post("/pair", data={"code": code}, allow_redirects=False)
             assert paired.status == 303
@@ -160,10 +160,19 @@ def test_web_shell_login_search_book_download_and_send(tmp_path: Path) -> None:
             assert await downloaded.read() == b"epub-content"
             assert "attachment" in downloaded.headers["Content-Disposition"]
 
+            recent_home = await client.get("/")
+            recent_text = await recent_home.text()
+            assert "Недавние книги" in recent_text and "/book/10" in recent_text
+
             sent = await client.post("/send/kindle/10", allow_redirects=False)
             assert sent.status == 303
+            assert sent.headers["Location"] == "/sent/kindle/10"
             assert queue.jobs[0]["chat_id"] is None
             assert queue.jobs[0]["status_message_id"] is None
+
+            sent_page = await client.get(sent.headers["Location"])
+            sent_text = await sent_page.text()
+            assert "Готово" in sent_text and "Дюна" in sent_text
 
             history = await client.get("/history")
             history_text = await history.text()

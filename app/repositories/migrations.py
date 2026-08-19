@@ -79,6 +79,16 @@ CREATE INDEX IF NOT EXISTS idx_web_sessions_user_created
 CREATE INDEX IF NOT EXISTS idx_web_sessions_expires
     ON web_sessions(expires_at);
 '''),
+(9,'009_add_user_announcements','''
+CREATE TABLE IF NOT EXISTS user_announcements (
+    user_id INTEGER NOT NULL,
+    announcement_id TEXT NOT NULL,
+    sent_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, announcement_id)
+);
+CREATE INDEX IF NOT EXISTS idx_user_announcements_id
+    ON user_announcements(announcement_id, sent_at);
+'''),
 ]
 async def run_migrations(conn):
  await conn.execute('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)')

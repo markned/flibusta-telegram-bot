@@ -20,6 +20,7 @@ from app.repositories.last_books import LastBooksRepository
 from app.repositories.reader_settings import ReaderSettingsRepository
 from app.repositories.web_access import WebAccessRepository
 from app.services.kindle import mask_email, sanitize_filename
+from app.services.covers.download import CoverDownloadError, download_cover
 from app.web.device import detect_device
 from app.web import ui
 
@@ -49,6 +50,9 @@ class WebDependencies:
     search_rate_limit_per_minute: int
     download_rate_limit_per_hour: int
     cookie_secure: bool
+    cover_resolver: Any | None = None
+    cover_download_max_bytes: int = 3 * 1024 * 1024
+    cover_download_timeout_seconds: float = 6
 
 
 class PairRateLimiter:
@@ -100,6 +104,7 @@ def build_web_app(deps: WebDependencies) -> web.Application:
     app.router.add_get("/search", _search)
     app.router.add_get("/author/{author_id}", _author)
     app.router.add_get("/book/{book_id}", _book)
+    app.router.add_get("/cover/{book_id}", _cover)
     app.router.add_get("/favorites", _favorites)
     app.router.add_post("/favorite/{action}/{book_id}", _favorite_action)
     app.router.add_get("/history", _history)
@@ -107,6 +112,7 @@ def build_web_app(deps: WebDependencies) -> web.Application:
     app.router.add_get("/readers", _readers)
     app.router.add_get("/download/{book_id}/{fmt}", _download)
     app.router.add_post("/send/{provider}/{book_id}", _send)
+    app.router.add_get("/sent/{provider}/{book_id}", _sent)
     return app
 
 
@@ -161,7 +167,25 @@ async def _health(request: web.Request) -> web.Response:
 async def _home(request: web.Request) -> web.Response:
     if request["user_id"] is None:
         return _html(ui.login_page())
-    return _html(ui.home_page(notice=request.query.get("notice")))
+    deps: WebDependencies = request.app[DEPS_KEY]
+    user_id = int(request["user_id"])
+    last, history = await asyncio.gather(
+        deps.last_books_repo.get(user_id),
+        deps.history_repo.recent(user_id, limit=10),
+    )
+    recent: list[SearchResult] = []
+    seen: set[str] = set()
+    if last is not None:
+        recent.append(SearchResult(last.book_id, last.title, last.author))
+        seen.add(last.book_id)
+    for item in history:
+        if not item.title or item.book_id in seen:
+            continue
+        recent.append(SearchResult(item.book_id, item.title, item.author))
+        seen.add(item.book_id)
+        if len(recent) >= 6:
+            break
+    return _html(ui.home_page(notice=request.query.get("notice"), recent_books=recent))
 
 
 async def _pair(request: web.Request) -> web.Response:
@@ -239,6 +263,18 @@ async def _book(request: web.Request) -> web.Response:
         ", ".join(details.authors) or None,
         "web_opened",
     )
+    cover_url = ""
+    if deps.cover_resolver is not None:
+        try:
+            cover = await deps.cover_resolver.resolve(
+                title=details.title,
+                authors=details.authors,
+                flibusta_cover_url=details.cover_url,
+            )
+            if cover is not None:
+                cover_url = f"/cover/{quote(details.book_id)}"
+        except Exception:
+            logger.info("web cover lookup skipped book_id=%s", details.book_id)
     return _html(
         ui.book_page(
             details,
@@ -247,7 +283,37 @@ async def _book(request: web.Request) -> web.Response:
             kindle_configured=bool(kindle and kindle.send_to_kindle_enabled),
             pocketbook_configured=bool(pocketbook and pocketbook.enabled),
             notice=request.query.get("notice"),
+            cover_url=cover_url,
         )
+    )
+
+
+async def _cover(request: web.Request) -> web.Response:
+    deps: WebDependencies = request.app[DEPS_KEY]
+    if deps.cover_resolver is None:
+        raise web.HTTPNotFound()
+    book_id = _catalog_id(request.match_info["book_id"])
+    details = await deps.flibusta.details(book_id)
+    cover = await deps.cover_resolver.resolve(
+        title=details.title,
+        authors=details.authors,
+        flibusta_cover_url=details.cover_url,
+    )
+    if cover is None:
+        raise web.HTTPNotFound()
+    try:
+        image = await download_cover(
+            cover.url,
+            max_bytes=deps.cover_download_max_bytes,
+            timeout=deps.cover_download_timeout_seconds,
+        )
+    except CoverDownloadError:
+        logger.info("web cover proxy failed source=%s book_id=%s", cover.source, book_id)
+        raise web.HTTPNotFound()
+    return web.Response(
+        body=image.content,
+        content_type=image.content_type,
+        headers={"Cache-Control": "private, max-age=86400", "X-Content-Type-Options": "nosniff"},
     )
 
 
@@ -386,12 +452,20 @@ async def _send(request: web.Request) -> web.Response:
             status_message_id=None,
             provider=provider,
         )
-        label = "PocketBook" if provider == "pocketbook" else "Kindle"
-        notice = f"Книга добавлена в очередь отправки на {label}."
     except Exception:
         logger.warning("web reader enqueue failed provider=%s book_id=%s", provider, book_id)
         notice = "Не удалось добавить книгу в очередь. Проверь настройки читалки."
-    raise web.HTTPSeeOther(f"/book/{quote(book_id)}?notice={quote(notice)}")
+        raise web.HTTPSeeOther(f"/book/{quote(book_id)}?notice={quote(notice)}")
+    raise web.HTTPSeeOther(f"/sent/{provider}/{quote(book_id)}")
+
+
+async def _sent(request: web.Request) -> web.Response:
+    provider = request.match_info["provider"]
+    if provider not in {"kindle", "pocketbook"}:
+        raise web.HTTPNotFound()
+    deps: WebDependencies = request.app[DEPS_KEY]
+    details = await deps.flibusta.details(_catalog_id(request.match_info["book_id"]))
+    return _html(ui.delivery_success_page(details, provider=provider))
 
 
 def _html(content: str, *, status: int = 200) -> web.Response:

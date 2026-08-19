@@ -248,7 +248,7 @@ def test_send_search_results_sends_message(monkeypatch):
     assert any("Нашёл книги" in text for text, _ in message.answers + message.edit_payloads)
     progress_markup = message.answers[0][1]["reply_markup"]
     progress_labels = [button.text for row in progress_markup.keyboard for button in row]
-    assert "📱 Читалки" in progress_labels and "⚙️ Kindle" not in progress_labels
+    assert "📱 Мои устройства" in progress_labels and "⚙️ Kindle" not in progress_labels
 
 
 def test_text_routing_uses_single_search_entrypoint(monkeypatch):
@@ -369,7 +369,7 @@ def test_start_help_and_home_describe_deterministic_search(monkeypatch):
     monkeypatch.setattr(main.settings, "access_control_enabled", False)
     message = _FakeMessage()
     run(main.start(message, Command()))
-    assert any("Библиотека им. Недзвецких" in text for text, _ in message.answers)
+    assert any("Полка" in text for text, _ in message.answers)
     text = home_text() + search_help_text()
     assert "подборк" not in text.lower()
     assert "антиутопия" not in text.lower()
@@ -384,7 +384,7 @@ def test_home_uses_one_persistent_menu_without_inline_duplicates(monkeypatch):
     assert len(message.answers) == 1
     markup = message.answers[0][1]["reply_markup"]
     labels = [button.text for row in markup.keyboard for button in row]
-    assert labels == ["⭐ Избранное", "🕘 История", "📚 Последняя", "📱 Читалки", "❓ Помощь"]
+    assert labels == ["⭐ Избранное", "🕘 История", "📚 Последняя", "📱 Мои устройства", "❓ Помощь"]
     assert not hasattr(markup, "inline_keyboard")
 
 

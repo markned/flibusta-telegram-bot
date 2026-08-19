@@ -25,7 +25,7 @@ def build_web_router(
         code = await web_access_repo.create_pairing_code(user_id, pair_code_ttl_seconds)
         minutes = max(1, pair_code_ttl_seconds // 60)
         await message.answer(
-            "<b>Веб-библиотека</b>\n\n"
+            "<b>Полка в браузере</b>\n\n"
             f"1. Открой на читалке:\n<a href=\"{escape(public_url, quote=True)}\">{escape(public_url)}</a>\n\n"
             f"2. Введи код: <code>{escape(code)}</code>\n\n"
             f"Код одноразовый и действует {minutes} минут.",
@@ -53,5 +53,5 @@ def _web_keyboard(public_url: str):
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Открыть веб-библиотеку", url=public_url))
     kb.row(InlineKeyboardButton(text="Новый код", callback_data="web_access_refresh"))
-    kb.row(InlineKeyboardButton(text="← Мои читалки", callback_data="readers_home"))
+    kb.row(InlineKeyboardButton(text="← Мои устройства", callback_data="readers_home"))
     return kb.as_markup()

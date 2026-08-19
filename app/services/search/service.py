@@ -6,7 +6,13 @@ from typing import Protocol
 from app.flibusta import AuthorResult, FlibustaError, SearchResult
 from app.services.search.planner import build_search_plan
 from app.services.search.types import SearchMode, SearchOutcome, SearchPlan
-from app.services.search_logic import base_title, norm, rank_and_dedupe_books, rank_authors
+from app.services.search_logic import (
+    base_title,
+    is_strong_book_match,
+    norm,
+    rank_and_dedupe_books,
+    rank_authors,
+)
 
 
 class SearchClient(Protocol):
@@ -116,7 +122,7 @@ class SearchService:
     async def _search_books_only(self, plan: SearchPlan) -> SearchOutcome:
         used: list[str] = []
         errors: list[Exception] = []
-        best: list[SearchResult] = []
+        candidates: list[SearchResult] = []
         for query in (*plan.primary_queries, *plan.fallback_queries):
             used.append(query)
             try:
@@ -126,10 +132,13 @@ class SearchService:
                 )
             except Exception as exc:
                 errors.append(exc)
-                break
+                continue
             if books:
-                best = books
-                break
+                candidates.extend(books)
+                ranked = rank_and_dedupe_books(candidates, plan.cleaned_query)
+                if ranked and is_strong_book_match(ranked[0], plan.cleaned_query):
+                    return SearchOutcome(plan, ranked, [], tuple(used))
+        best = rank_and_dedupe_books(candidates, plan.cleaned_query)
         if errors and not best:
             raise _as_flibusta_error(errors[0])
         return SearchOutcome(plan, best, [], tuple(used))

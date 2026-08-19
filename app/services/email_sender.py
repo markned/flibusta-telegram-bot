@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from email.message import EmailMessage
+from email.headerregistry import Address
 
 import aiosmtplib
 from email_validator import EmailNotValidError, validate_email
+
+from app.branding import BRAND_EMAIL_FROM_NAME
 
 
 class EmailConfigurationError(RuntimeError):
@@ -53,10 +56,11 @@ class EmailSender:
     ) -> EmailMessage:
         self.validate_config()
         message = EmailMessage()
-        message["From"] = self.from_email
+        local, domain = (self.from_email or "").rsplit("@", 1)
+        message["From"] = Address(display_name=BRAND_EMAIL_FROM_NAME, username=local, domain=domain)
         message["To"] = to_email
         message["Subject"] = subject
-        message.set_content("Sent by your private library bot.")
+        message.set_content("Отправлено через Полку.")
         maintype, _, subtype = content_type.partition("/")
         message.add_attachment(
             content,

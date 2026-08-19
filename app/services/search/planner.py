@@ -32,6 +32,8 @@ def build_search_plan(query: str, *, max_fallback_queries: int = 2) -> SearchPla
     fallback: list[str] = []
     if mode in {SearchMode.EXACT, SearchMode.FALLBACK}:
         words = cleaned.split()
+        if len(words) >= 2 and words[0].casefold() in {"книга", "роман", "повесть"}:
+            fallback.append(" ".join(words[1:]))
         if len(words) >= 4:
             fallback.extend((" ".join(words[:-1]), " ".join(words[1:])))
     fallback = _dedupe(fallback)[: max(0, max_fallback_queries)]

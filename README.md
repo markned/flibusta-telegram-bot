@@ -1,6 +1,6 @@
-# Flibusta Telegram Bot
+# Полка
 
-Лёгкий Telegram-бот для поиска и скачивания книг с Flibusta.
+Лёгкая личная библиотека в Telegram и браузере: поиск книг во Flibusta, скачивание и отправка на Kindle/PocketBook.
 
 ## Что умеет
 - закрытый вход: по приглашению или после одобрения админом;
@@ -23,21 +23,21 @@
 - ⭐ Избранное
 - 🕘 История
 - 📚 Последняя
-- 📱 Читалки
+- 📱 Мои устройства
 - ❓ Помощь
 
 Стартовый экран показывает примеры точного поиска, а постоянная нижняя клавиатура служит единственным главным меню. Админские команды скрыты от обычных пользователей; при необходимости их можно включить только для админских чатов через `UI_SHOW_ADMIN_COMMANDS=true`. Для отладки compact command menu можно вернуть флагом `UI_SHOW_POWER_USER_COMMANDS=true`, но production default — пустое меню команд.
 
 ## Надёжный поиск
 
-Обычный текст обрабатывается детерминированно. Точное название сначала проверяется только по книжному каталогу и не ждёт отдельный поиск авторов. Авторская ветка запускается лишь тогда, когда книжных совпадений нет. Вызов Flibusta ограничен `SEARCH_SOURCE_TIMEOUT_SECONDS`, весь пользовательский запрос — `SEARCH_TOTAL_TIMEOUT_SECONDS`; при временном сбое бот может вернуть недавний результат из SQLite-кеша. Если точного результата нет, бот пробует не больше `SEARCH_FALLBACK_MAX_QUERIES` укороченных вариантов.
+Обычный текст обрабатывается детерминированно. Точное название сначала проверяется только по книжному каталогу и не ждёт отдельный поиск авторов. Авторская ветка запускается лишь тогда, когда книжных совпадений нет. Вызов Flibusta ограничен `SEARCH_SOURCE_TIMEOUT_SECONDS`, весь пользовательский запрос — `SEARCH_TOTAL_TIMEOUT_SECONDS`; при временном сбое бот может вернуть недавний результат из SQLite-кеша. Если точного результата нет, бот пробует ограниченное число безопасных вариантов. Одинаковые издания схлопываются, а чистая версия без служебных пометок поднимается выше.
 
 Рекомендуемые production-значения:
 
 ```env
-SEARCH_TOTAL_TIMEOUT_SECONDS=12
-SEARCH_SOURCE_TIMEOUT_SECONDS=9
-SEARCH_FALLBACK_MAX_QUERIES=2
+SEARCH_TOTAL_TIMEOUT_SECONDS=35
+SEARCH_SOURCE_TIMEOUT_SECONDS=25
+SEARCH_FALLBACK_MAX_QUERIES=3
 ```
 
 ## Веб-библиотека для Kindle и PocketBook
@@ -45,13 +45,14 @@ SEARCH_FALLBACK_MAX_QUERIES=2
 `books.technique.ink` — лёгкая server-rendered оболочка над теми же сервисами, которые использует Telegram-бот. Отдельной базы и отдельного каталога нет.
 
 Возможности:
-- вход по одноразовому коду из Telegram (`Читалки → Веб-библиотека`);
+- вход по одноразовому коду из Telegram (`Мои устройства → Веб-версия`);
 - поиск по названию, автору и сочетанию «название + автор»;
 - карточка книги, избранное и история;
 - прямое скачивание доступных форматов на телефоне или компьютере;
-- на Kindle и PocketBook — одна крупная кнопка отправки на текущую читалку без файловых загрузок.
+- на Kindle и PocketBook — одна крупная кнопка отправки на текущее устройство без файловых загрузок;
+- недавние книги на главной и отдельный экран после отправки.
 
-Интерфейс не требует JavaScript, определяет Kindle/PocketBook по `User-Agent` и использует совместимую с их старыми браузерами линейную вёрстку. Обложка отображается только при наличии URL в карточке книги; её показ также должен быть разрешён в настройках браузера читалки. Сырые коды и сессионные токены не сохраняются: SQLite содержит только HMAC-хеши. Книги передаются по запросу и не хранятся постоянно.
+Интерфейс не требует JavaScript, определяет Kindle/PocketBook по `User-Agent` и использует совместимую с их старыми браузерами линейную вёрстку. Надёжные обложки проксируются через `books.technique.ink`, чтобы старой читалке не приходилось открывать сторонние CDN; если обложки нет, тег изображения не выводится. Сырые коды и сессионные токены не сохраняются: SQLite содержит только HMAC-хеши. Книги передаются по запросу и не хранятся постоянно.
 
 ```env
 WEB_ENABLED=true
@@ -94,7 +95,7 @@ Kindle delivery is implemented as generic SMTP: the bot downloads the selected b
 
 ## Send to PocketBook
 
-Open `📱 Читалки` → `PocketBook` and save the device address issued by Send-to-PocketBook. The address must end in `@pbsync.com`. PocketBook may ask the user to approve `SMTP_FROM_EMAIL` as a trusted sender after the first message.
+Open `📱 Мои устройства` → `PocketBook` and save the device address issued by Send-to-PocketBook. The address must end in `@pbsync.com`. PocketBook may ask the user to approve `SMTP_FROM_EMAIL` as a trusted sender after the first message.
 
 PocketBook delivery reuses the same SMTP connection, in-process queue, rate limits and delivery history as Kindle. Preferred format order is EPUB, FB2, PDF, TXT. No additional service or dependency is required, and downloaded files are not stored after delivery.
 

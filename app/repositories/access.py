@@ -45,6 +45,12 @@ class AccessRepository:
   sql+=' ORDER BY requested_at DESC LIMIT ?'; params+= (limit,)
   async with self.db.connect() as c: rows=await (await c.execute(sql,params)).fetchall()
   return [AccessUser(**dict(r)) for r in rows]
+ async def list_user_ids(self,status:str|None=None,limit:int=10000):
+  sql='SELECT user_id FROM access_users'; params=()
+  if status: sql+=' WHERE status=?'; params=(status,)
+  sql+=' ORDER BY user_id LIMIT ?'; params+=(limit,)
+  async with self.db.connect() as c: rows=await (await c.execute(sql,params)).fetchall()
+  return [int(r['user_id']) for r in rows]
  async def ensure_user(self,user_id:int,status:str='approved',approved_by:int|None=None):
   async with self.db.connect() as c:
    await c.execute("INSERT INTO access_users(user_id,status,requested_at,approved_at,approved_by) VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET status=excluded.status,approved_at=excluded.approved_at,approved_by=excluded.approved_by",(user_id,status,now(),now() if status=='approved' else None,approved_by)); await c.commit()

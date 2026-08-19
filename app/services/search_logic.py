@@ -38,7 +38,7 @@ def rank_and_dedupe_books(results: list[SearchResult], query: str) -> list[Searc
     )
 
 
-def book_score(item: SearchResult, query_norm: str) -> tuple[int, int, int, int, int, float]:
+def book_score(item: SearchResult, query_norm: str) -> tuple[int, int, int, int, int, int, float, int]:
     title = norm(base_title(item.title))
     full_title = norm(item.title)
     author = norm(item.author or "")
@@ -48,13 +48,33 @@ def book_score(item: SearchResult, query_norm: str) -> tuple[int, int, int, int,
     title_coverage = _coverage(query_tokens, title_tokens)
     combined_coverage = _coverage(query_tokens, combined_tokens)
     similarity = SequenceMatcher(None, query_norm, title).ratio() if query_norm and title else 0.0
+    clean_edition = _edition_quality(item.title)
     return (
         int(title == query_norm),
         int(title.startswith(query_norm)),
         int(query_norm in full_title),
         int(title_coverage == 100),
         combined_coverage,
+        clean_edition,
         similarity,
+        -len(item.title),
+    )
+
+
+def is_strong_book_match(item: SearchResult, query: str) -> bool:
+    """Return whether a catalog hit is good enough to stop fallback search."""
+    expected = norm(query)
+    title = norm(base_title(item.title))
+    author = norm(item.author or "")
+    if not expected or not title:
+        return False
+    expected_tokens = set(expected.split())
+    combined_tokens = set(f"{title} {author}".split())
+    return bool(
+        title == expected
+        or expected in title
+        or expected_tokens <= combined_tokens
+        or SequenceMatcher(None, expected, title).ratio() >= 0.78
     )
 
 
@@ -76,3 +96,18 @@ def _coverage(expected: set[str], actual: set[str]) -> int:
     if not expected:
         return 0
     return round(100 * len(expected & actual) / len(expected))
+
+
+def _edition_quality(title: str) -> int:
+    lowered = title.casefold()
+    noisy_markers = (
+        "[litres]",
+        "[ru]",
+        "[en]",
+        "[uk]",
+        "с оптимизированной обложкой",
+        "с обложкой",
+        "(fb2)",
+        "(epub)",
+    )
+    return 10 - sum(marker in lowered for marker in noisy_markers)

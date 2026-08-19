@@ -112,7 +112,7 @@ FAVORITES_BUTTON = "⭐ Избранное"
 HISTORY_BUTTON = "🕘 История"
 LAST_BUTTON = "📚 Последняя"
 KINDLE_BUTTON = "⚙️ Kindle"
-READERS_BUTTON = "📱 Читалки"
+READERS_BUTTON = "📱 Мои устройства"
 HELP_BUTTON = "❓ Помощь"
 
 router = Router()
@@ -248,7 +248,7 @@ async def start(message: Message, command: CommandObject) -> None:
         existing = await access_repo.get_user(message.from_user.id)
         arg = (command.args or "").strip()
         if arg.startswith("invite_") and await access_repo.redeem_invite(arg.removeprefix("invite_"), message.from_user.id, message.from_user.username, message.from_user.full_name):
-            await message.answer("Приглашение принято. Добро пожаловать в библиотеку.", reply_markup=_reply_keyboard())
+            await message.answer("Приглашение принято. Добро пожаловать в Полку.", reply_markup=_reply_keyboard())
             await send_home(message)
             return
         if existing and existing.status == "blocked":
@@ -474,7 +474,7 @@ async def search_text(message: Message) -> None:
     if text == LAST_BUTTON:
         await last_command(message); return
     if text in {KINDLE_BUTTON, READERS_BUTTON}:
-        await message.answer("Открываю меню читалок.", reply_markup=back_home_keyboard())
+        await message.answer("Открываю меню устройств.", reply_markup=back_home_keyboard())
         return
     if text == HELP_BUTTON:
         await send_help(message)
@@ -1524,6 +1524,9 @@ async def main() -> None:
                     search_rate_limit_per_minute=settings.search_rate_limit_per_minute,
                     download_rate_limit_per_hour=settings.download_rate_limit_per_hour,
                     cookie_secure=settings.web_cookie_secure,
+                    cover_resolver=cover_resolver,
+                    cover_download_max_bytes=settings.cover_max_download_mb * 1024 * 1024,
+                    cover_download_timeout_seconds=settings.cover_lookup_timeout_seconds,
                 ),
                 host=settings.web_host,
                 port=settings.web_port,

@@ -31,7 +31,7 @@ class CachedFlibustaClient:
         stale_if_error_seconds: int = 604800,
         circuit_breaker_failures: int = 3,
         circuit_breaker_cooldown_seconds: float = 30,
-        source_timeout_seconds: float = 9,
+        source_timeout_seconds: float = 25,
     ) -> None:
         self.client = client
         self.repo = repo
