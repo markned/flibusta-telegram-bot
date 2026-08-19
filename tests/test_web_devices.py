@@ -48,7 +48,7 @@ def test_kindle_page_only_offers_send_to_kindle() -> None:
     assert "/send/pocketbook/10" not in html
     assert "/download/" not in html
     assert "Добавить в избранное" not in html
-    assert '<img class="cover"' not in html
+    assert '<img class="cover"' in html
 
 
 def test_pocketbook_page_only_offers_send_to_pocketbook() -> None:
@@ -64,7 +64,7 @@ def test_pocketbook_page_only_offers_send_to_pocketbook() -> None:
     assert "/send/pocketbook/10" in html
     assert "/send/kindle/10" not in html
     assert "/download/" not in html
-    assert '<img class="cover"' not in html
+    assert '<img class="cover"' in html
 
 
 def test_reader_without_settings_shows_setup_hint_not_downloads() -> None:

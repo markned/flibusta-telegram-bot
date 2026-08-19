@@ -9,7 +9,7 @@
 - Flibusta remains the only catalog source.
 - A lightweight aiohttp web shell reuses the same search, cache, SQLite, favorites, history and reader delivery services.
 - Web users pair through a one-time Telegram code; only HMAC hashes of codes and sessions are stored.
-- Kindle and PocketBook are detected from `User-Agent`; their book cards hide downloads/covers and expose only the matching configured delivery action.
+- Kindle and PocketBook are detected from `User-Agent`; their book cards hide downloads and expose only the matching configured delivery action. Available covers remain visible.
 - Android, iOS and desktop browsers retain direct format downloads and both configured reader actions.
 - Web CSS avoids flex/grid and `min()` so old e-ink WebKit engines retain readable spacing and controls.
 - Search/download/reader delivery/favorites/history/admin flows remain intact.

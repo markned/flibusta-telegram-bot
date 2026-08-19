@@ -146,9 +146,7 @@ def book_page(
 ) -> str:
     notice_html = f'<div class="notice">{escape(notice)}</div>' if notice else ""
     cover = ""
-    # E-reader browsers are fragile around remote images. A missing or blocked
-    # cover must never leave a broken placeholder on the book page.
-    if not device.is_reader and details.cover_url and details.cover_url.startswith(("http://", "https://")):
+    if details.cover_url and details.cover_url.startswith(("http://", "https://")):
         cover = f'<img class="cover" src="{escape(details.cover_url, quote=True)}" alt="Обложка">'
     authors = ", ".join(details.authors) or "Автор не указан"
     metadata = []
