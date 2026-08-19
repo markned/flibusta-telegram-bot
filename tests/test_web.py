@@ -105,6 +105,8 @@ def test_web_shell_login_search_book_download_and_send(tmp_path: Path) -> None:
         search = FakeSearch()
         flibusta = FakeFlibusta()
         queue = FakeQueue()
+        kindle_settings = KindleSettingsRepository(db)
+        await kindle_settings.upsert(42, "reader@kindle.com")
         deps = WebDependencies(
             search_service=search,
             flibusta=flibusta,
@@ -113,7 +115,7 @@ def test_web_shell_login_search_book_download_and_send(tmp_path: Path) -> None:
             favorites_repo=FavoritesRepository(db),
             history_repo=DownloadHistoryRepository(db),
             last_books_repo=LastBooksRepository(db),
-            kindle_settings_repo=KindleSettingsRepository(db),
+            kindle_settings_repo=kindle_settings,
             reader_settings_repo=ReaderSettingsRepository(db),
             delivery_queue=queue,
             admin_ids=set(),
@@ -144,6 +146,14 @@ def test_web_shell_login_search_book_download_and_send(tmp_path: Path) -> None:
 
             book = await client.get("/book/10")
             assert "Пустынная планета" in await book.text()
+
+            kindle_book = await client.get(
+                "/book/10",
+                headers={"User-Agent": "Mozilla/5.0 Kindle/5.17.1"},
+            )
+            kindle_text = await kindle_book.text()
+            assert "Добавить на Kindle" in kindle_text
+            assert "/download/" not in kindle_text
 
             downloaded = await client.get("/download/10/epub")
             assert downloaded.status == 200

@@ -20,6 +20,7 @@ from app.repositories.last_books import LastBooksRepository
 from app.repositories.reader_settings import ReaderSettingsRepository
 from app.repositories.web_access import WebAccessRepository
 from app.services.kindle import mask_email, sanitize_filename
+from app.web.device import detect_device
 from app.web import ui
 
 
@@ -241,9 +242,10 @@ async def _book(request: web.Request) -> web.Response:
     return _html(
         ui.book_page(
             details,
+            device=detect_device(request.headers.get("User-Agent")),
             favorite=favorite,
-            kindle_configured=kindle is not None,
-            pocketbook_configured=pocketbook is not None,
+            kindle_configured=bool(kindle and kindle.send_to_kindle_enabled),
+            pocketbook_configured=bool(pocketbook and pocketbook.enabled),
             notice=request.query.get("notice"),
         )
     )

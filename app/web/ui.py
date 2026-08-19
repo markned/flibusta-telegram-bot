@@ -4,18 +4,20 @@ from html import escape
 from urllib.parse import quote_plus
 
 from app.flibusta import AuthorResult, BookDetails, SearchResult
+from app.web.device import DeviceProfile
 
 
 BASE_CSS = """
-:root { color-scheme: light; }
 * { box-sizing: border-box; }
 body { margin: 0; background: #fff; color: #111; font: 20px/1.45 Georgia, serif; }
-main { width: min(760px, 100%); margin: 0 auto; padding: 20px 18px 48px; }
+main { width: auto; max-width: 760px; margin: 0 auto; padding: 20px 18px 48px; }
 header { border-bottom: 2px solid #111; margin-bottom: 24px; padding-bottom: 12px; }
 h1 { font-size: 1.55rem; margin: 0 0 8px; }
 h2 { font-size: 1.25rem; margin-top: 28px; }
 a { color: #111; text-decoration-thickness: 2px; }
-.nav { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 10px; }
+.nav { margin-top: 10px; line-height: 2; }
+.nav a { white-space: nowrap; }
+.nav-separator { padding: 0 7px; }
 .muted { color: #444; }
 .notice { border: 2px solid #111; padding: 12px; margin: 16px 0; }
 .card { border-bottom: 1px solid #777; padding: 16px 0; }
@@ -25,12 +27,15 @@ form { margin: 16px 0; }
 input[type=search], input[type=text] { width: 100%; min-height: 54px; border: 2px solid #111; border-radius: 0; padding: 10px 12px; background: #fff; color: #111; font: inherit; }
 button, .button { display: inline-block; min-height: 50px; border: 2px solid #111; border-radius: 0; padding: 9px 16px; background: #fff; color: #111; font: inherit; font-weight: 700; text-decoration: none; cursor: pointer; }
 .primary { background: #111; color: #fff; }
-.actions { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+.actions { display: block; margin: 16px 0; }
+.actions .button, .actions form { margin: 0 8px 10px 0; vertical-align: top; }
+.reader-action { margin: 18px 0; }
+.reader-action button { display: block; width: 100%; min-height: 58px; }
 .inline { display: inline; margin: 0; }
 .meta { margin: 8px 0; color: #333; }
 ol, ul { padding-left: 1.3em; }
 footer { border-top: 1px solid #777; margin-top: 36px; padding-top: 12px; font-size: .85rem; }
-@media (max-width: 520px) { body { font-size: 18px; } main { padding: 14px 12px 36px; } .cover { width: 70%; } button, .button { width: 100%; text-align: center; } .inline button { width: auto; } }
+@media (max-width: 520px) { body { font-size: 18px; } main { padding: 14px 12px 36px; } .cover { width: 70%; } button, .button { width: 100%; text-align: center; } .actions .button, .actions form { display: block; width: 100%; margin: 0 0 12px; } .actions form button { width: 100%; } }
 """
 
 
@@ -39,9 +44,9 @@ def page(title: str, body: str, *, authenticated: bool = False) -> str:
     if authenticated:
         nav = (
             '<nav class="nav">'
-            '<a href="/">Поиск</a>'
-            '<a href="/favorites">Избранное</a>'
-            '<a href="/history">История</a>'
+            '<a href="/">Поиск</a><span class="nav-separator">·</span>'
+            '<a href="/favorites">Избранное</a><span class="nav-separator">·</span>'
+            '<a href="/history">История</a><span class="nav-separator">·</span>'
             '<a href="/readers">Читалки</a>'
             "</nav>"
         )
@@ -133,6 +138,7 @@ def author_list(authors: list[AuthorResult]) -> str:
 def book_page(
     details: BookDetails,
     *,
+    device: DeviceProfile,
     favorite: bool,
     kindle_configured: bool,
     pocketbook_configured: bool,
@@ -140,7 +146,9 @@ def book_page(
 ) -> str:
     notice_html = f'<div class="notice">{escape(notice)}</div>' if notice else ""
     cover = ""
-    if details.cover_url and details.cover_url.startswith(("http://", "https://")):
+    # E-reader browsers are fragile around remote images. A missing or blocked
+    # cover must never leave a broken placeholder on the book page.
+    if not device.is_reader and details.cover_url and details.cover_url.startswith(("http://", "https://")):
         cover = f'<img class="cover" src="{escape(details.cover_url, quote=True)}" alt="Обложка">'
     authors = ", ".join(details.authors) or "Автор не указан"
     metadata = []
@@ -160,26 +168,44 @@ def book_page(
         text = " ".join(details.annotation.split())
         annotation = f"<h2>Описание</h2><p>{escape(text[:3000])}{'…' if len(text) > 3000 else ''}</p>"
 
-    actions = ['<div class="actions">']
-    for item in _ordered_formats(details):
-        actions.append(
-            f'<a class="button" href="/download/{quote_plus(details.book_id)}/{quote_plus(item.code)}">'
-            f"Скачать {escape(item.code.upper())}</a>"
-        )
-    actions.append("</div>")
-    if kindle_configured or pocketbook_configured:
-        actions.append('<h2>Отправить на читалку</h2><div class="actions">')
-        if kindle_configured:
-            actions.append(_post_button(f"/send/kindle/{details.book_id}", "Отправить на Kindle"))
-        if pocketbook_configured:
-            actions.append(_post_button(f"/send/pocketbook/{details.book_id}", "Отправить на PocketBook"))
-        actions.append("</div>")
+    actions: list[str] = []
+    if device.is_reader:
+        actions.append(f'<p class="muted">Режим устройства: {escape(device.label)}.</p>')
+        provider = device.reader_provider
+        configured = kindle_configured if provider == "kindle" else pocketbook_configured if provider == "pocketbook" else False
+        if provider and configured:
+            label = "Добавить на Kindle" if provider == "kindle" else "Добавить на PocketBook"
+            actions.append('<div class="reader-action">')
+            actions.append(_post_button(f"/send/{provider}/{details.book_id}", label))
+            actions.append("</div>")
+        elif provider:
+            actions.append(
+                f'<p class="notice">{escape(device.label)} ещё не настроен. '
+                "Настрой отправку один раз в Telegram.</p>"
+            )
+        else:
+            actions.append('<p class="notice">Автоматическая отправка на эту читалку пока не поддерживается.</p>')
     else:
-        actions.append('<p class="notice">Читалка ещё не настроена. Настрой её один раз в Telegram.</p>')
+        actions.append('<div class="actions">')
+        for item in _ordered_formats(details):
+            actions.append(
+                f'<a class="button" href="/download/{quote_plus(details.book_id)}/{quote_plus(item.code)}">'
+                f"Скачать {escape(item.code.upper())}</a>"
+            )
+        actions.append("</div>")
+        if kindle_configured or pocketbook_configured:
+            actions.append('<h2>Отправить на читалку</h2><div class="actions">')
+            if kindle_configured:
+                actions.append(_post_button(f"/send/kindle/{details.book_id}", "Отправить на Kindle"))
+            if pocketbook_configured:
+                actions.append(_post_button(f"/send/pocketbook/{details.book_id}", "Отправить на PocketBook"))
+            actions.append("</div>")
+        else:
+            actions.append('<p class="notice">Читалка ещё не настроена. Настрой её один раз в Telegram.</p>')
 
-    fav_action = "remove" if favorite else "add"
-    fav_label = "Удалить из избранного" if favorite else "Добавить в избранное"
-    actions.append(_post_button(f"/favorite/{fav_action}/{details.book_id}", fav_label))
+        fav_action = "remove" if favorite else "add"
+        fav_label = "Удалить из избранного" if favorite else "Добавить в избранное"
+        actions.append(_post_button(f"/favorite/{fav_action}/{details.book_id}", fav_label))
     return page(
         details.title,
         f"{notice_html}<article><h2>{escape(details.title)}</h2>"
