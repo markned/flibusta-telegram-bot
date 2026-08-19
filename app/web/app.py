@@ -53,6 +53,7 @@ class WebDependencies:
     cover_resolver: Any | None = None
     cover_download_max_bytes: int = 3 * 1024 * 1024
     cover_download_timeout_seconds: float = 6
+    search_stats_repo: Any | None = None
 
 
 class PairRateLimiter:
@@ -103,6 +104,7 @@ def build_web_app(deps: WebDependencies) -> web.Application:
     app.router.add_post("/logout", _logout)
     app.router.add_get("/search", _search)
     app.router.add_get("/author/{author_id}", _author)
+    app.router.add_get("/series/{series_id}", _series)
     app.router.add_get("/book/{book_id}", _book)
     app.router.add_get("/cover/{book_id}", _cover)
     app.router.add_get("/favorites", _favorites)
@@ -237,6 +239,8 @@ async def _search(request: web.Request) -> web.Response:
     error = None
     if outcome.plan.mode.value == "unsupported_topic":
         error = "Поиск работает по названию книги, автору или их сочетанию."
+    elif not outcome.books and not outcome.authors and deps.search_stats_repo is not None:
+        await deps.search_stats_repo.record_miss(query)
     return _html(ui.search_page(query, outcome.books, outcome.authors, error=error))
 
 
@@ -245,6 +249,13 @@ async def _author(request: web.Request) -> web.Response:
     author_id = _catalog_id(request.match_info["author_id"])
     name, books = await deps.flibusta.author_books(author_id, limit=40)
     return _html(ui.simple_books_page(f"Книги автора: {name}", books, "Книги не найдены."))
+
+
+async def _series(request: web.Request) -> web.Response:
+    deps: WebDependencies = request.app[DEPS_KEY]
+    series_id = _catalog_id(request.match_info["series_id"])
+    name, books = await deps.flibusta.series_books(series_id, limit=80)
+    return _html(ui.simple_books_page(f"Серия: {name}", books, "Книги серии не найдены."))
 
 
 async def _book(request: web.Request) -> web.Response:
@@ -319,9 +330,13 @@ async def _cover(request: web.Request) -> web.Response:
 
 async def _favorites(request: web.Request) -> web.Response:
     deps: WebDependencies = request.app[DEPS_KEY]
-    items = await deps.favorites_repo.list(int(request["user_id"]), limit=50)
+    query = " ".join(request.query.get("q", "").split())[:100]
+    sort = request.query.get("sort", "new") if request.query.get("sort") in {"new", "title", "author"} else "new"
+    page = max(0, min(1000, int(request.query.get("page", "0"))) if request.query.get("page", "0").isdigit() else 0)
+    items = await deps.favorites_repo.list(int(request["user_id"]), limit=20, offset=page * 20, sort=sort, query=query)
+    count = await deps.favorites_repo.count(int(request["user_id"]), query=query)
     books = [SearchResult(item.book_id, item.title, item.author) for item in items]
-    return _html(ui.simple_books_page("Избранное", books, "В избранном пока пусто."))
+    return _html(ui.favorites_page(books, count=count, page_number=page, query=query, sort=sort))
 
 
 async def _favorite_action(request: web.Request) -> web.Response:

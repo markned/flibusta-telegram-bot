@@ -168,6 +168,9 @@ def book_page(
     if details.series:
         labels = [item.name + (f" #{item.position}" if item.position else "") for item in details.series[:2]]
         series_html = f'<p><b>Серия:</b> {escape(", ".join(labels))}</p>'
+        links = [f'<a class="button" href="/series/{quote_plus(item.series_id)}">Книги серии</a>' for item in details.series[:2] if item.series_id]
+        if links:
+            series_html += '<div class="actions">' + "".join(links) + "</div>"
     annotation = ""
     if details.annotation:
         text = " ".join(details.annotation.split())
@@ -252,6 +255,20 @@ def simple_books_page(title: str, books: list[SearchResult], empty_text: str) ->
     body = f"<h2>{escape(title)}</h2>"
     body += book_list(books) if books else f"<p>{escape(empty_text)}</p>"
     return page(title, body, authenticated=True)
+
+
+def favorites_page(books: list[SearchResult], *, count: int, page_number: int, query: str, sort: str) -> str:
+    body = f"<h2>Избранное</h2><p>Книг: {count}</p>"
+    body += ('<form method="get" action="/favorites"><input name="q" type="search" placeholder="Название или автор" value="' + escape(query, quote=True) + '">'
+             '<p><button type="submit">Найти в избранном</button></p></form>')
+    body += '<p><a href="/favorites?sort=new">Новые</a> · <a href="/favorites?sort=title">По названию</a> · <a href="/favorites?sort=author">По автору</a></p>'
+    body += book_list(books) if books else "<p>Ничего не найдено.</p>"
+    params = f"sort={quote_plus(sort)}&q={quote_plus(query)}"
+    if page_number > 0:
+        body += f'<a class="button" href="/favorites?{params}&page={page_number - 1}">Назад</a> '
+    if (page_number + 1) * 20 < count:
+        body += f'<a class="button" href="/favorites?{params}&page={page_number + 1}">Дальше</a>'
+    return page("Избранное", body, authenticated=True)
 
 
 def history_page(items) -> str:

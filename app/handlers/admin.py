@@ -10,8 +10,12 @@ from app.repositories.download_history import DownloadHistoryRepository
 from app.repositories.favorites import FavoritesRepository
 from app.repositories.kindle_deliveries import KindleDeliveriesRepository
 from app.services.kindle_queue import KindleQueue
+from app.repositories.db import Database
+from app.repositories.web_access import WebAccessRepository
+from app.repositories.search_stats import SearchStatsRepository
+from app.services.health import collect_health, human_bytes
 
-def build_admin_router(*,access_repo:AccessRepository,cache_repo:CacheRepository,history_repo:DownloadHistoryRepository,favorites_repo:FavoritesRepository,deliveries_repo:KindleDeliveriesRepository,kindle_queue:KindleQueue,admin_ids:set[int])->Router:
+def build_admin_router(*,access_repo:AccessRepository,cache_repo:CacheRepository,history_repo:DownloadHistoryRepository,favorites_repo:FavoritesRepository,deliveries_repo:KindleDeliveriesRepository,kindle_queue:KindleQueue,admin_ids:set[int],db:Database|None=None,web_access_repo:WebAccessRepository|None=None,search_stats_repo:SearchStatsRepository|None=None)->Router:
  router=Router()
  def is_admin(msg): return msg.from_user and msg.from_user.id in admin_ids
  async def panel(message:Message,*,edit=False):
@@ -27,6 +31,7 @@ def build_admin_router(*,access_repo:AccessRepository,cache_repo:CacheRepository
   kb.row(InlineKeyboardButton(text='👥 Пользователи',callback_data='admin_users'),InlineKeyboardButton(text='⏳ Заявки',callback_data='admin_pending'))
   kb.row(InlineKeyboardButton(text='🎟 Инвайты',callback_data='admin_invites'),InlineKeyboardButton(text='📊 Статистика',callback_data='admin_stats_home'))
   kb.row(InlineKeyboardButton(text='🧹 Очистить кэш',callback_data='admin_cache_clear_expired'))
+  kb.row(InlineKeyboardButton(text='🩺 Диагностика',callback_data='admin_health'))
   if edit: await message.edit_text(text,reply_markup=kb.as_markup())
   else: await message.answer(text,reply_markup=kb.as_markup())
  @router.message(Command('admin'))
@@ -96,4 +101,24 @@ def build_admin_router(*,access_repo:AccessRepository,cache_repo:CacheRepository
   if c.from_user.id not in admin_ids:return
   await c.answer(); top=', '.join(f'{f}:{n}' for f,n in await history_repo.top_formats()) or '—'
   await c.message.edit_text('<b>Статистика</b>\n\n'+f"Telegram сегодня: {await history_repo.sent_today('telegram')}\nKindle сегодня: {await history_repo.sent_today('kindle')}\nТоп форматов: {top}",reply_markup=InlineKeyboardBuilder().row(InlineKeyboardButton(text='← Админка',callback_data='admin_home')).as_markup())
+ @router.message(Command('admin_health'))
+ async def health_command(m:Message):
+  if is_admin(m): await send_health(m)
+ @router.callback_query(F.data=='admin_health')
+ async def health_callback(c:CallbackQuery):
+  if c.from_user.id not in admin_ids:return
+  await c.answer(); await send_health(c.message,edit=True)
+ async def send_health(message:Message,edit:bool=False):
+  if db is None:return
+  health=await collect_health(db); total,_,expired=await cache_repo.stats()
+  sessions=await web_access_repo.active_session_count() if web_access_repo else 0
+  misses,modes=await search_stats_repo.summary() if search_stats_repo else (0,[])
+  text=("<b>Диагностика</b>\n\n"
+        f"SQLite: {'✅' if health.sqlite_ok else '❌'} · {human_bytes(health.database_bytes)}\n"
+        f"WAL: {human_bytes(health.wal_bytes)}\nСвободно: {human_bytes(health.disk_free_bytes)}\n"
+        f"Кэш: {total} · просрочено {expired}\nОчередь: {kindle_queue.size()} · активно {kindle_queue.active_jobs}\n"
+        f"Веб-сессии: {sessions}\nПромахи поиска за 7 дней: {misses}"
+        + ("\nПо типам: "+", ".join(f"{mode}: {count}" for mode,count in modes) if modes else ""))
+  kb=InlineKeyboardBuilder().row(InlineKeyboardButton(text='← Админка',callback_data='admin_home')).as_markup()
+  await (message.edit_text(text,reply_markup=kb) if edit else message.answer(text,reply_markup=kb))
  return router

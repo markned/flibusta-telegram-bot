@@ -89,6 +89,17 @@ CREATE TABLE IF NOT EXISTS user_announcements (
 CREATE INDEX IF NOT EXISTS idx_user_announcements_id
     ON user_announcements(announcement_id, sent_at);
 '''),
+(10,'010_add_search_miss_stats','''
+CREATE TABLE IF NOT EXISTS search_miss_stats (
+    day TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    length_bucket TEXT NOT NULL,
+    keyboard_variant INTEGER NOT NULL,
+    fallback_count INTEGER NOT NULL,
+    count INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (day, mode, length_bucket, keyboard_variant, fallback_count)
+);
+'''),
 ]
 async def run_migrations(conn):
  await conn.execute('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)')
