@@ -18,3 +18,9 @@ This repo is a small aiogram + SQLite Telegram bot. Keep changes boring, modular
 3. Keep write scopes separate when multiple agents work in parallel.
 4. Preserve existing search, download, Kindle, favorites, and history flows.
 5. Before handoff, run `make check` and update `handoff/CURRENT.md` if the task materially changes repo state.
+
+## Codex Cloud
+- Setup: `bash .codex/cloud-setup.sh`
+- Maintenance: `bash .codex/cloud-maintenance.sh`
+- Use a dummy `TELEGRAM_BOT_TOKEN` for tests; never copy production secrets.
+- Cloud work should finish as a tested PR. Merging to `main` deploys Oracle via GitHub Actions.

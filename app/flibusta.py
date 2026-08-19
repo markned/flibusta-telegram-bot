@@ -89,6 +89,11 @@ class FlibustaClient:
             proxy=proxy or None,
             follow_redirects=False,
             http2=True,
+            limits=httpx.Limits(
+                max_connections=8,
+                max_keepalive_connections=4,
+                keepalive_expiry=30,
+            ),
             headers={
                 "User-Agent": "Mozilla/5.0 flibusta-bot/0.1",
                 "Accept-Language": "ru,en;q=0.8",

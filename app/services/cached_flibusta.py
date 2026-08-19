@@ -43,8 +43,18 @@ class CachedFlibustaClient:
         self.source_timeout_seconds = max(0.05, source_timeout_seconds)
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
+        # Identical requests often arrive from Telegram and the web UI at the
+        # same time. Share one source call instead of making Flibusta do the
+        # same slow work twice. Tasks are removed as soon as they finish.
+        self._inflight: dict[str, asyncio.Task] = {}
+        self._max_inflight = 64
 
     async def close(self) -> None:
+        tasks = list(self._inflight.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
         await self.client.close()
 
     async def search(self, query: str, limit: int = 8):
@@ -121,27 +131,48 @@ class CachedFlibustaClient:
                 return stale
             raise FlibustaError("Flibusta временно недоступна. Попробуй через минуту.")
 
-        try:
-            if source_timeout_seconds is None:
-                value = await loader()
-            else:
-                async with asyncio.timeout(source_timeout_seconds):
-                    value = await loader()
-        except Exception:
-            self._record_failure()
-            stale = await self._stale(cache_key, cache_type, decode)
-            if stale is not None:
-                logger.info("using stale cache after Flibusta failure type=%s", cache_type)
-                return stale
-            raise
-
-        self._record_success()
-        if self.enabled and _worth_caching(value):
+        async def load_and_cache():
             try:
-                await self.repo.set(cache_key, cache_type, value, self.ttls[cache_type])
+                if source_timeout_seconds is None:
+                    value = await loader()
+                else:
+                    async with asyncio.timeout(source_timeout_seconds):
+                        value = await loader()
             except Exception:
-                logger.warning("cache write failed type=%s", cache_type, exc_info=True)
-        return value
+                self._record_failure()
+                stale = await self._stale(cache_key, cache_type, decode)
+                if stale is not None:
+                    logger.info("using stale cache after Flibusta failure type=%s", cache_type)
+                    return stale
+                raise
+
+            self._record_success()
+            if self.enabled and _worth_caching(value):
+                try:
+                    await self.repo.set(cache_key, cache_type, value, self.ttls[cache_type])
+                except Exception:
+                    logger.warning("cache write failed type=%s", cache_type, exc_info=True)
+            return value
+
+        return await self._coalesced(cache_key, load_and_cache)
+
+    async def _coalesced(self, cache_key: str, loader):
+        task = self._inflight.get(cache_key)
+        if task is None:
+            if len(self._inflight) >= self._max_inflight:
+                return await loader()
+            task = asyncio.create_task(loader())
+            self._inflight[cache_key] = task
+
+            def cleanup(done: asyncio.Task) -> None:
+                if self._inflight.get(cache_key) is done:
+                    self._inflight.pop(cache_key, None)
+                # Retrieve an exception even when every waiter was cancelled.
+                if not done.cancelled():
+                    done.exception()
+
+            task.add_done_callback(cleanup)
+        return await asyncio.shield(task)
 
     async def _stale(self, cache_key, cache_type, decode):
         if not self.enabled or self.stale_if_error_seconds <= 0:

@@ -64,3 +64,14 @@ Legacy AI/discovery variables are ignored for rolling-deploy safety and should b
 - No downloaded books stored permanently.
 - No real network calls in tests.
 - Keep Kindle/PocketBook worker concurrency at 1 in production.
+
+## Performance and cloud development
+
+- SQLite uses WAL with `synchronous=NORMAL`, a 2 MiB per-connection page cache,
+  bounded WAL checkpoints and an 8 MiB journal limit.
+- Concurrent identical Flibusta reads are coalesced into one upstream request;
+  the in-process task map is capped at 64 and entries are removed on completion.
+- Flibusta HTTP connections are capped at 8 with 4 keep-alive sockets.
+- Codex Cloud bootstrap scripts live in `.codex/`; see `docs/codex-cloud.md`.
+- Cloud development does not replace production: tested PRs merge to `main`,
+  then the existing GitHub Actions workflow deploys Oracle.

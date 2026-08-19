@@ -154,6 +154,53 @@ def test_cached_client_does_not_persist_empty_search(tmp_path: Path):
     assert raw.calls == 2
 
 
+def test_cached_client_coalesces_identical_concurrent_requests(tmp_path: Path):
+    class SlowFlibusta(CountingFlibusta):
+        async def search(self, query, limit=8):
+            self.calls += 1
+            await asyncio.sleep(0.02)
+            return [SearchResult("1", "Book", "Author")]
+
+    async def scenario():
+        db = Database(str(tmp_path / "db.sqlite"))
+        await db.initialize()
+        raw = SlowFlibusta()
+        cached = CachedFlibustaClient(
+            raw,
+            CacheRepository(db),
+            enabled=True,
+            ttls={"book_search": 60},
+        )
+        first, second = await asyncio.gather(
+            cached.search("Book"),
+            cached.search("book"),
+        )
+        return raw.calls, first, second, len(cached._inflight)
+
+    calls, first, second, inflight = run(scenario())
+    assert calls == 1
+    assert first == second
+    assert inflight == 0
+
+
+def test_database_uses_low_memory_wal_pragmas(tmp_path: Path):
+    async def scenario():
+        db = Database(str(tmp_path / "db.sqlite"))
+        await db.initialize()
+        async with db.connect() as conn:
+            journal = (await (await conn.execute("PRAGMA journal_mode")).fetchone())[0]
+            synchronous = (await (await conn.execute("PRAGMA synchronous")).fetchone())[0]
+            cache_size = (await (await conn.execute("PRAGMA cache_size")).fetchone())[0]
+            checkpoint = (await (await conn.execute("PRAGMA wal_autocheckpoint")).fetchone())[0]
+        return journal, synchronous, cache_size, checkpoint
+
+    journal, synchronous, cache_size, checkpoint = run(scenario())
+    assert journal == "wal"
+    assert synchronous == 1  # NORMAL
+    assert cache_size == -2048
+    assert checkpoint == 500
+
+
 def test_intent_router_deterministic_examples():
     assert route_intent("Дюна").kind == IntentKind.EXACT_SEARCH
     assert route_intent("Эдит Патту").kind == IntentKind.AUTHOR_SEARCH
