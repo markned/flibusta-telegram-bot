@@ -31,5 +31,13 @@ jobs:
             export SYSTEMD_PAGER=cat
             sudo -n /usr/bin/systemctl restart flibusta-tg-bot
             sudo -n /usr/bin/systemctl status flibusta-tg-bot
-            sleep 2
-            curl -fsS http://127.0.0.1:8081/health >/dev/null
+            for attempt in $(seq 1 30); do
+              if curl -fsS --max-time 2 http://127.0.0.1:8081/health >/dev/null; then
+                break
+              fi
+              if [ "$attempt" -eq 30 ]; then
+                echo "Web health check did not become ready in time" >&2
+                exit 1
+              fi
+              sleep 2
+            done
