@@ -42,6 +42,8 @@ class SearchService:
             return await self._within_deadline(self._search_author_title_with_fallback(plan))
         if plan.mode == SearchMode.AUTHOR:
             return await self._within_deadline(self._search_author_with_fallback(plan))
+        if plan.mode == SearchMode.EXACT:
+            return await self._within_deadline(self._search_exact(plan))
         return await self._within_deadline(self._search_general(plan))
 
     async def search_books(self, query: str) -> SearchOutcome:
@@ -79,32 +81,37 @@ class SearchService:
         return await self._within_deadline(self._search_author_title(plan))
 
     async def _search_general(self, plan: SearchPlan) -> SearchOutcome:
-        used: list[str] = []
-        best_books: list[SearchResult] = []
-        best_authors: list[AuthorResult] = []
-        errors: list[Exception] = []
+        # Book search is the common path. Do not make a fast title lookup wait
+        # for the independent (and often slower) author endpoint.
+        try:
+            books = await self._search_books_only(plan)
+        except Exception as book_error:
+            raise _as_flibusta_error(book_error) from book_error
+        if books.books:
+            return books
 
-        for query in (*plan.primary_queries, *plan.fallback_queries):
-            used.append(query)
-            try:
-                books, authors = await self.client.search_all(
-                    query,
-                    book_limit=self.book_limit,
-                    author_limit=self.author_limit,
-                )
-            except Exception as exc:
-                errors.append(exc)
-                continue
-            books = rank_and_dedupe_books(books, plan.cleaned_query)
-            authors = rank_authors(authors, plan.cleaned_query)
-            if _result_quality(books, authors) > _result_quality(best_books, best_authors):
-                best_books, best_authors = books, authors
-            if books or authors:
-                break
+        try:
+            authors = await self._search_author_only(plan)
+        except Exception as author_error:
+            raise _as_flibusta_error(author_error) from author_error
+        return SearchOutcome(
+            plan,
+            [],
+            authors.authors,
+            tuple(dict.fromkeys((*books.used_queries, *authors.used_queries))),
+        )
 
-        if errors and not best_books and not best_authors:
-            raise _as_flibusta_error(errors[0])
-        return SearchOutcome(plan, best_books, best_authors, tuple(used))
+    async def _search_exact(self, plan: SearchPlan) -> SearchOutcome:
+        books = await self._search_books_only(plan)
+        if books.books:
+            return books
+        authors = await self._search_author_only(plan)
+        return SearchOutcome(
+            plan,
+            [],
+            authors.authors,
+            tuple(dict.fromkeys((*books.used_queries, *authors.used_queries))),
+        )
 
     async def _search_books_only(self, plan: SearchPlan) -> SearchOutcome:
         used: list[str] = []
@@ -119,7 +126,7 @@ class SearchService:
                 )
             except Exception as exc:
                 errors.append(exc)
-                continue
+                break
             if books:
                 best = books
                 break
@@ -142,7 +149,7 @@ class SearchService:
             outcome = SearchOutcome(plan, [], [], ())
         if outcome.authors:
             return outcome
-        return await self._search_general(_general_fallback_plan(plan))
+        return await self._search_books_only(_general_fallback_plan(plan))
 
     async def _search_author_title_with_fallback(self, plan: SearchPlan) -> SearchOutcome:
         try:
@@ -152,7 +159,7 @@ class SearchService:
         if outcome.books:
             return outcome
         try:
-            general = await self._search_general(_general_fallback_plan(plan))
+            general = await self._search_books_only(_general_fallback_plan(plan))
         except Exception:
             if outcome.authors:
                 return outcome
@@ -167,29 +174,34 @@ class SearchService:
     async def _search_author_title(self, plan: SearchPlan) -> SearchOutcome:
         author = plan.author or ""
         title = plan.title or plan.cleaned_query
-        direct_result, author_result = await asyncio.gather(
-            self.client.search(title, limit=self.book_limit),
-            self.client.search_authors(author, limit=min(self.author_limit, 10)),
-            return_exceptions=True,
-        )
-
-        errors = [item for item in (direct_result, author_result) if isinstance(item, Exception)]
-        books: list[SearchResult] = []
-        authors: list[AuthorResult] = []
-        if not isinstance(direct_result, Exception):
-            books.extend(direct_result)
-        if not isinstance(author_result, Exception):
-            authors.extend(author_result)
-
+        errors: list[Exception] = []
+        try:
+            books = await self.client.search(title, limit=self.book_limit)
+        except Exception as exc:
+            books = []
+            errors.append(exc)
         matched = [book for book in books if book.author and author_name_matches(author, book.author)]
-        if not matched:
-            matched = await self._expand_author_books(author, title, rank_authors(authors, author))
+        if matched:
+            return SearchOutcome(
+                plan,
+                rank_and_dedupe_books(matched, title),
+                [],
+                (title,),
+            )
+
+        try:
+            authors = await self.client.search_authors(author, limit=min(self.author_limit, 10))
+        except Exception as exc:
+            authors = []
+            errors.append(exc)
+        ranked_authors = rank_authors(authors, author)
+        matched = await self._expand_author_books(author, title, ranked_authors)
         if errors and not matched and not authors:
             raise _as_flibusta_error(errors[0])
         return SearchOutcome(
             plan,
             rank_and_dedupe_books(matched, title),
-            rank_authors(authors, author),
+            ranked_authors,
             (title, author),
         )
 
@@ -242,13 +254,11 @@ def title_matches(expected: str, actual: str) -> bool:
     return actual_norm == expected_norm or expected_norm in actual_norm or actual_norm in expected_norm
 
 
-def _result_quality(books: list[SearchResult], authors: list[AuthorResult]) -> tuple[int, int]:
-    return int(bool(books)) + int(bool(authors)), len(books) + len(authors)
-
-
 def _as_flibusta_error(exc: Exception) -> FlibustaError:
     if isinstance(exc, FlibustaError):
         return exc
+    if isinstance(exc, TimeoutError):
+        return FlibustaError("Flibusta не ответила вовремя. Попробуй ещё раз через минуту.")
     return FlibustaError("Не удалось подключиться к Flibusta.")
 
 

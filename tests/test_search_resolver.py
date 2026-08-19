@@ -43,11 +43,14 @@ def test_general_search_uses_bounded_fallback() -> None:
         def __init__(self):
             self.queries = []
 
-        async def search_all(self, query, book_limit, author_limit):
+        async def search(self, query, limit):
             self.queries.append(query)
             if query == "Очень длинное название книги":
-                return [SearchResult("1", "Очень длинное название книги", "Автор")], []
-            return [], []
+                return [SearchResult("1", "Очень длинное название книги", "Автор")]
+            return []
+
+        async def search_authors(self, query, limit):
+            return []
 
     client = Client()
     service = SearchService(client, book_limit=10, author_limit=10, max_fallback_queries=1)
@@ -58,9 +61,9 @@ def test_general_search_uses_bounded_fallback() -> None:
 
 def test_search_service_enforces_total_deadline() -> None:
     class Client:
-        async def search_all(self, *args, **kwargs):
+        async def search(self, *args, **kwargs):
             await asyncio.sleep(0.1)
-            return [], []
+            return []
 
     service = SearchService(Client(), book_limit=10, author_limit=10, timeout_seconds=0.01)
     with pytest.raises(TimeoutError):
@@ -128,12 +131,9 @@ def test_author_title_tolerates_partial_endpoint_failure() -> None:
 def test_misclassified_person_like_title_falls_back_to_general_search() -> None:
     class Client:
         async def search(self, query, limit):
-            return []
-
-        async def search_all(self, query, book_limit, author_limit):
             if query.casefold() == "евгений онегин":
-                return [SearchResult("onegin", "Евгений Онегин", "Александр Пушкин")], []
-            return [], []
+                return [SearchResult("onegin", "Евгений Онегин", "Александр Пушкин")]
+            return []
 
         async def search_authors(self, query, limit):
             return []
@@ -141,6 +141,46 @@ def test_misclassified_person_like_title_falls_back_to_general_search() -> None:
     service = SearchService(Client(), book_limit=10, author_limit=10)
     result = run(service.search("Евгений Онегин"))
     assert result.books[0].book_id == "onegin"
+
+
+def test_exact_title_does_not_wait_for_author_endpoint() -> None:
+    class Client:
+        def __init__(self):
+            self.author_calls = 0
+
+        async def search(self, query, limit):
+            return [SearchResult("book", "Чапаев и пустота", "Виктор Пелевин")]
+
+        async def search_authors(self, query, limit):
+            self.author_calls += 1
+            await asyncio.sleep(1)
+            return []
+
+    client = Client()
+    service = SearchService(client, book_limit=10, author_limit=10, timeout_seconds=0.05)
+    result = run(service.search("Чапаев и пустота"))
+    assert result.books[0].book_id == "book"
+    assert client.author_calls == 0
+
+
+def test_author_title_returns_direct_match_without_author_lookup() -> None:
+    class Client:
+        def __init__(self):
+            self.author_calls = 0
+
+        async def search(self, query, limit):
+            return [SearchResult("book", "Исповедь", "Лев Толстой")]
+
+        async def search_authors(self, query, limit):
+            self.author_calls += 1
+            await asyncio.sleep(1)
+            return []
+
+    client = Client()
+    service = SearchService(client, book_limit=10, author_limit=10, timeout_seconds=0.05)
+    result = run(service.search("исповедь толстой"))
+    assert result.books[0].book_id == "book"
+    assert client.author_calls == 0
 
 
 def test_book_ranking_prefers_full_token_match() -> None:

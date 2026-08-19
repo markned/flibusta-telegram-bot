@@ -167,6 +167,7 @@ flibusta = CachedFlibustaClient(
     stale_if_error_seconds=settings.cache_stale_if_error_seconds,
     circuit_breaker_failures=settings.flibusta_circuit_breaker_failures,
     circuit_breaker_cooldown_seconds=settings.flibusta_circuit_breaker_cooldown_seconds,
+    source_timeout_seconds=settings.search_source_timeout_seconds,
 )
 search_service = SearchService(
     flibusta,
@@ -1236,6 +1237,12 @@ def log_startup_config() -> None:
         settings.polling_retry_delay_seconds,
         safe_proxy_info(settings.telegram_proxy),
         safe_proxy_info(settings.http_proxy),
+    )
+    logger.info(
+        "startup search_total_timeout=%ss search_source_timeout=%ss search_fallback_queries=%s",
+        settings.search_total_timeout_seconds,
+        settings.search_source_timeout_seconds,
+        settings.search_fallback_max_queries,
     )
     logger.info(
         "startup smtp_provider=%s smtp_host=%s smtp_port=%s smtp_from=%s",

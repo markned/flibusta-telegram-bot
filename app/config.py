@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     telegram_max_upload_mb: int = Field(default=50, alias="TELEGRAM_MAX_UPLOAD_MB")
     search_results_limit: int = Field(default=40, alias="SEARCH_RESULTS_LIMIT")
     search_total_timeout_seconds: float = Field(default=12, alias="SEARCH_TOTAL_TIMEOUT_SECONDS")
+    search_source_timeout_seconds: float = Field(default=9, alias="SEARCH_SOURCE_TIMEOUT_SECONDS")
     search_fallback_max_queries: int = Field(default=2, alias="SEARCH_FALLBACK_MAX_QUERIES")
     smtp_provider: str = Field(default="custom", alias="SMTP_PROVIDER")
     smtp_host: str | None = Field(default=None, alias="SMTP_HOST")

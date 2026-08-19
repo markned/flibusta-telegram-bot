@@ -104,6 +104,31 @@ def test_cached_client_uses_stale_cache_on_source_error(tmp_path: Path):
     repo = CacheRepository(db)
     cached = CachedFlibustaClient(raw, repo, enabled=True, ttls={"book_search": -1}, stale_if_error_seconds=60)
     assert run(cached.search("Book"))[0].title == "Book"
+
+
+def test_cached_client_uses_stale_cache_on_source_timeout(tmp_path: Path):
+    class SlowFlibusta(CountingFlibusta):
+        async def search(self, query, limit=8):
+            self.calls += 1
+            if self.calls > 1:
+                await asyncio.sleep(0.1)
+            return [SearchResult("1", "Book", "Author")]
+
+    db = Database(str(tmp_path / "db.sqlite"))
+    run(db.initialize())
+    raw = SlowFlibusta()
+    repo = CacheRepository(db)
+    cached = CachedFlibustaClient(
+        raw,
+        repo,
+        enabled=True,
+        ttls={"book_search": -1},
+        stale_if_error_seconds=60,
+        source_timeout_seconds=0.01,
+    )
+    assert run(cached.search("Book"))[0].title == "Book"
+    assert run(cached.search("Book"))[0].title == "Book"
+    assert raw.calls == 2
     raw.fail = True
     assert run(cached.search("Book"))[0].title == "Book"
 

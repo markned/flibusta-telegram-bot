@@ -12,10 +12,12 @@
 ## Search reliability
 
 - One total search deadline (`SEARCH_TOTAL_TIMEOUT_SECONDS`).
+- Exact title and author+title matches return from the book endpoint without waiting for author search.
+- Individual catalog calls have a shorter `SEARCH_SOURCE_TIMEOUT_SECONDS`, allowing stale-cache fallback before the total deadline.
 - At most `SEARCH_FALLBACK_MAX_QUERIES` shortened variants.
 - Case-insensitive author/title matching.
 - One keyboard-layout correction for Latin input.
-- Book and author branches run concurrently and preserve partial success.
+- Book search runs first; author search is only used when no book was found.
 - Empty responses are not cached.
 - Fresh SQLite cache is preferred; recent stale data can be used only when Flibusta fails.
 - A small in-memory circuit breaker prevents repeated failing calls.
@@ -23,6 +25,7 @@
 ## Production configuration additions
 
 ```env
+SEARCH_SOURCE_TIMEOUT_SECONDS=9
 CACHE_STALE_IF_ERROR_SECONDS=604800
 FLIBUSTA_CIRCUIT_BREAKER_FAILURES=3
 FLIBUSTA_CIRCUIT_BREAKER_COOLDOWN_SECONDS=30

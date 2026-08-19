@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from time import monotonic
@@ -30,6 +31,7 @@ class CachedFlibustaClient:
         stale_if_error_seconds: int = 604800,
         circuit_breaker_failures: int = 3,
         circuit_breaker_cooldown_seconds: float = 30,
+        source_timeout_seconds: float = 9,
     ) -> None:
         self.client = client
         self.repo = repo
@@ -38,6 +40,7 @@ class CachedFlibustaClient:
         self.stale_if_error_seconds = max(0, stale_if_error_seconds)
         self.circuit_breaker_failures = max(1, circuit_breaker_failures)
         self.circuit_breaker_cooldown_seconds = max(0.0, circuit_breaker_cooldown_seconds)
+        self.source_timeout_seconds = max(0.05, source_timeout_seconds)
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
 
@@ -50,6 +53,7 @@ class CachedFlibustaClient:
             f"{_cache_query(query)}:{limit}",
             lambda: self.client.search(query, limit),
             lambda rows: [SearchResult(**row) for row in rows],
+            source_timeout_seconds=self.source_timeout_seconds,
         )
 
     async def search_authors(self, query: str, limit: int = 20):
@@ -58,6 +62,7 @@ class CachedFlibustaClient:
             f"{_cache_query(query)}:{limit}",
             lambda: self.client.search_authors(query, limit),
             lambda rows: [AuthorResult(**row) for row in rows],
+            source_timeout_seconds=self.source_timeout_seconds,
         )
 
     async def search_all(self, query: str, book_limit: int = 8, author_limit: int = 20):
@@ -69,6 +74,7 @@ class CachedFlibustaClient:
                 [SearchResult(**row) for row in pair[0]],
                 [AuthorResult(**row) for row in pair[1]],
             ),
+            source_timeout_seconds=self.source_timeout_seconds,
         )
 
     async def author_books(self, author_id: str, limit: int = 40):
@@ -77,6 +83,7 @@ class CachedFlibustaClient:
             f"{author_id}:{limit}",
             lambda: self.client.author_books(author_id, limit),
             lambda pair: (pair[0], [SearchResult(**row) for row in pair[1]]),
+            source_timeout_seconds=self.source_timeout_seconds,
         )
 
     async def details(self, book_id: str):
@@ -90,7 +97,15 @@ class CachedFlibustaClient:
     async def download(self, *args, **kwargs):
         return await self.client.download(*args, **kwargs)
 
-    async def _cached(self, cache_type, key, loader, decode):
+    async def _cached(
+        self,
+        cache_type,
+        key,
+        loader,
+        decode,
+        *,
+        source_timeout_seconds: float | None = None,
+    ):
         cache_key = f"{cache_type}:{key}"
         if self.enabled:
             try:
@@ -107,7 +122,11 @@ class CachedFlibustaClient:
             raise FlibustaError("Flibusta временно недоступна. Попробуй через минуту.")
 
         try:
-            value = await loader()
+            if source_timeout_seconds is None:
+                value = await loader()
+            else:
+                async with asyncio.timeout(source_timeout_seconds):
+                    value = await loader()
         except Exception:
             self._record_failure()
             stale = await self._stale(cache_key, cache_type, decode)
