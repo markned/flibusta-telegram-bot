@@ -29,3 +29,13 @@ def test_search_reliability_settings_load(monkeypatch):
     assert settings.cache_stale_if_error_seconds == 3600
     assert settings.flibusta_circuit_breaker_failures == 4
     assert settings.flibusta_circuit_breaker_cooldown_seconds == 20
+
+
+def test_web_settings_are_disabled_without_secret(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:test")
+    monkeypatch.setenv("WEB_ENABLED", "true")
+    monkeypatch.setenv("WEB_PUBLIC_URL", "https://books.technique.ink/")
+    settings = Settings(_env_file=None)
+    assert settings.web_enabled is True
+    assert settings.web_configured is False
+    assert settings.web_public_url_normalized == "https://books.technique.ink"

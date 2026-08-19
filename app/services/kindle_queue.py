@@ -17,9 +17,9 @@ logger = logging.getLogger(__name__)
 class KindleQueueJob:
     delivery_id: int
     user_id: int
-    chat_id: int
+    chat_id: int | None
     book_id: str
-    status_message_id: int
+    status_message_id: int | None
     provider: str = "kindle"
 
 
@@ -62,7 +62,7 @@ class KindleQueue:
         await asyncio.gather(*self._workers, return_exceptions=True)
         self._workers.clear()
 
-    async def enqueue(self, *, user_id: int, chat_id: int, book_id: str, status_message_id: int, retry_of_delivery_id: int | None = None, provider: str = "kindle") -> int:
+    async def enqueue(self, *, user_id: int, chat_id: int | None, book_id: str, status_message_id: int | None, retry_of_delivery_id: int | None = None, provider: str = "kindle") -> int:
         delivery_id = await self.service.create_queued_delivery(user_id, book_id, retry_of_delivery_id=retry_of_delivery_id, provider=provider)
         await self._queue.put(
             KindleQueueJob(
@@ -101,7 +101,7 @@ class KindleQueue:
                     self._queue.task_done()
 
     async def _edit_status(self, job: KindleQueueJob, text: str) -> None:
-        if self._bot is None:
+        if self._bot is None or job.chat_id is None or job.status_message_id is None:
             return
         try:
             await self._bot.edit_message_text(text,chat_id=job.chat_id,message_id=job.status_message_id)

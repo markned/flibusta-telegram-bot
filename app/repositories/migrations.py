@@ -57,6 +57,28 @@ CREATE TABLE IF NOT EXISTS user_reader_settings (
 CREATE INDEX IF NOT EXISTS idx_user_reader_settings_provider_user ON user_reader_settings(provider, user_id);
 ALTER TABLE kindle_deliveries ADD COLUMN provider TEXT NOT NULL DEFAULT 'kindle';
 '''),
+(8,'008_add_web_access','''
+CREATE TABLE IF NOT EXISTS web_pairing_codes (
+    code_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_web_pairing_codes_user_expires
+    ON web_pairing_codes(user_id, expires_at);
+CREATE TABLE IF NOT EXISTS web_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_web_sessions_user_created
+    ON web_sessions(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_web_sessions_expires
+    ON web_sessions(expires_at);
+'''),
 ]
 async def run_migrations(conn):
  await conn.execute('CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)')

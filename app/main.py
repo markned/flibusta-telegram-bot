@@ -35,6 +35,7 @@ from app.config import Settings
 from app.flibusta import AuthorResult, FlibustaClient, FlibustaError, SearchResult
 from app.handlers.kindle import build_kindle_router, user_message_for_exception
 from app.handlers.readers import build_readers_router
+from app.handlers.web import build_web_router
 from app.handlers.admin import build_admin_router
 from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
 from app.repositories.db import Database
@@ -47,6 +48,7 @@ from app.repositories.favorites import FavoritesRepository
 from app.repositories.download_history import DownloadHistoryRepository, DownloadHistoryItem
 from app.repositories.last_books import LastBooksRepository
 from app.repositories.access import AccessRepository
+from app.repositories.web_access import WebAccessRepository
 from app.services.email_sender import EmailSender
 from app.services.conversion import ConversionService
 from app.services.covers.download import download_cover
@@ -95,6 +97,7 @@ from app.ui.home import (
     home_text,
     search_help_text,
 )
+from app.web import WebDependencies, start_web_server
 
 settings = Settings()
 logging.basicConfig(
@@ -153,6 +156,7 @@ favorites_repo = FavoritesRepository(db)
 download_history_repo = DownloadHistoryRepository(db)
 last_books_repo = LastBooksRepository(db)
 access_repo = AccessRepository(db)
+web_access_repo = WebAccessRepository(db, settings.web_auth_secret) if settings.web_auth_secret else None
 flibusta = CachedFlibustaClient(
     raw_flibusta,
     cache_repo,
@@ -1245,6 +1249,13 @@ def log_startup_config() -> None:
         settings.search_fallback_max_queries,
     )
     logger.info(
+        "startup web_enabled=%s web_host=%s web_port=%s web_public_url=%s",
+        "yes" if settings.web_configured else "no",
+        settings.web_host,
+        settings.web_port,
+        settings.web_public_url_normalized,
+    )
+    logger.info(
         "startup smtp_provider=%s smtp_host=%s smtp_port=%s smtp_from=%s",
         settings.smtp_provider_normalized,
         settings.smtp_effective_host or "disabled",
@@ -1421,6 +1432,7 @@ async def main() -> None:
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dispatcher = Dispatcher()
+    web_runner = None
     if settings.access_control_enabled:
         dispatcher.message.middleware(AccessMiddleware(access_repo, settings.admin_ids))
         dispatcher.callback_query.middleware(AccessMiddleware(access_repo, settings.admin_ids))
@@ -1433,6 +1445,14 @@ async def main() -> None:
             email_sender=email_sender,
             smtp_from_email=settings.smtp_from_email,
             smtp_config_present=settings.smtp_config_present,
+            web_enabled=settings.web_configured,
+        )
+    )
+    dispatcher.include_router(
+        build_web_router(
+            web_access_repo=web_access_repo,
+            public_url=settings.web_public_url_normalized,
+            pair_code_ttl_seconds=settings.web_pair_code_ttl_seconds,
         )
     )
     dispatcher.include_router(
@@ -1481,6 +1501,33 @@ async def main() -> None:
     dispatcher.include_router(router)
     try:
         await kindle_queue.start(bot)
+        if settings.web_configured and web_access_repo is not None:
+            await web_access_repo.prune_expired()
+            web_runner = await start_web_server(
+                WebDependencies(
+                    search_service=search_service,
+                    flibusta=flibusta,
+                    web_access_repo=web_access_repo,
+                    access_repo=access_repo,
+                    favorites_repo=favorites_repo,
+                    history_repo=download_history_repo,
+                    last_books_repo=last_books_repo,
+                    kindle_settings_repo=kindle_settings_repo,
+                    reader_settings_repo=reader_settings_repo,
+                    delivery_queue=kindle_queue,
+                    admin_ids=settings.admin_ids,
+                    access_control_enabled=settings.access_control_enabled,
+                    session_days=settings.web_session_days,
+                    max_sessions_per_user=settings.web_max_sessions_per_user,
+                    download_max_bytes=settings.web_download_max_mb * 1024 * 1024,
+                    download_concurrency=settings.web_download_concurrency,
+                    search_rate_limit_per_minute=settings.search_rate_limit_per_minute,
+                    download_rate_limit_per_hour=settings.download_rate_limit_per_hour,
+                    cookie_secure=settings.web_cookie_secure,
+                ),
+                host=settings.web_host,
+                port=settings.web_port,
+            )
         await setup_bot_commands(bot)
         while True:
             try:
@@ -1496,6 +1543,8 @@ async def main() -> None:
                 )
                 await sleep(settings.polling_retry_delay_seconds)
     finally:
+        if web_runner is not None:
+            await web_runner.cleanup()
         await kindle_queue.stop()
         await flibusta.close()
         await bot.session.close()

@@ -40,6 +40,35 @@ SEARCH_SOURCE_TIMEOUT_SECONDS=9
 SEARCH_FALLBACK_MAX_QUERIES=2
 ```
 
+## Веб-библиотека для Kindle и PocketBook
+
+`books.technique.ink` — лёгкая server-rendered оболочка над теми же сервисами, которые использует Telegram-бот. Отдельной базы и отдельного каталога нет.
+
+Возможности:
+- вход по одноразовому коду из Telegram (`Читалки → Веб-библиотека`);
+- поиск по названию, автору и сочетанию «название + автор»;
+- карточка книги, избранное и история;
+- прямое скачивание доступного формата;
+- отправка на уже настроенные Kindle и PocketBook.
+
+Интерфейс не требует JavaScript и рассчитан на e-ink браузеры. Сырые коды и сессионные токены не сохраняются: SQLite содержит только HMAC-хеши. Книги передаются по запросу и не хранятся постоянно.
+
+```env
+WEB_ENABLED=true
+WEB_HOST=127.0.0.1
+WEB_PORT=8081
+WEB_PUBLIC_URL=https://books.technique.ink
+WEB_AUTH_SECRET=replace_with_a_long_random_secret
+WEB_PAIR_CODE_TTL_SECONDS=600
+WEB_SESSION_DAYS=90
+WEB_MAX_SESSIONS_PER_USER=5
+WEB_DOWNLOAD_MAX_MB=45
+WEB_DOWNLOAD_CONCURRENCY=1
+WEB_COOKIE_SECURE=true
+```
+
+Production deploy автоматически создаёт `WEB_AUTH_SECRET`, если его ещё нет. Для первого подключения домена направьте A-запись `books.technique.ink` на сервер и один раз запустите `deploy/setup-web-proxy.sh` от root.
+
 ## Локальный запуск
 ```bash
 cp .env.example .env

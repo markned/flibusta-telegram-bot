@@ -34,6 +34,7 @@ def build_readers_router(
     email_sender: EmailSender,
     smtp_from_email: str | None,
     smtp_config_present: bool,
+    web_enabled: bool = False,
 ) -> Router:
     router = Router()
 
@@ -44,7 +45,7 @@ def build_readers_router(
         lines.append(f"Kindle: {'✅ настроен' if kindle else 'не настроен'}")
         lines.append(f"PocketBook: {'✅ настроен' if pocketbook else 'не настроен'}")
         lines.extend(("", "Настрой читалку один раз, затем отправляй книги прямо из карточки."))
-        await message.answer("\n".join(lines), reply_markup=_readers_keyboard())
+        await message.answer("\n".join(lines), reply_markup=_readers_keyboard(web_enabled))
 
     async def send_pocketbook_home(message: Message, user_id: int) -> None:
         settings = await reader_settings_repo.get(user_id, "pocketbook")
@@ -213,7 +214,7 @@ def build_readers_router(
                 await callback.answer()
                 await callback.message.answer(
                     "Сначала настрой читалку — это займёт минуту.",
-                    reply_markup=_readers_keyboard(),
+                    reply_markup=_readers_keyboard(web_enabled),
                 )
                 return
             if len(configured) > 1:
@@ -232,7 +233,7 @@ def build_readers_router(
         label = "PocketBook" if provider == "pocketbook" else "Kindle"
         if provider == "kindle" and await kindle_settings_repo.get(callback.from_user.id) is None:
             await callback.answer()
-            await callback.message.answer("Kindle ещё не настроен.", reply_markup=_readers_keyboard())
+            await callback.message.answer("Kindle ещё не настроен.", reply_markup=_readers_keyboard(web_enabled))
             return
         if provider == "pocketbook" and await reader_settings_repo.get(callback.from_user.id, provider) is None:
             await callback.answer()
@@ -273,10 +274,12 @@ def _pocketbook_home_text(settings: ReaderSettings | None, smtp_from_email: str 
     )
 
 
-def _readers_keyboard():
+def _readers_keyboard(web_enabled: bool = False):
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Kindle", callback_data="kindle_home"))
     kb.row(InlineKeyboardButton(text="PocketBook", callback_data="pocketbook_home"))
+    if web_enabled:
+        kb.row(InlineKeyboardButton(text="🌐 Веб-библиотека", callback_data="web_access"))
     kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
     return kb.as_markup()
 

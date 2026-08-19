@@ -44,6 +44,19 @@ sudo systemctl enable --now flibusta-tg-bot
 sudo systemctl status flibusta-tg-bot
 ```
 
+## Web UI на books.technique.ink
+
+1. Создайте DNS A-запись `books.technique.ink` на публичный IP сервера.
+2. Убедитесь, что входящие TCP 80/443 разрешены в Oracle Security List/NSG.
+3. После деплоя выполните от root:
+
+```bash
+cd /home/bookbot/flibusta-telegram-bot
+sudo bash deploy/setup-web-proxy.sh books.technique.ink books@technique.ink
+```
+
+Приложение слушает только `127.0.0.1:8081`; наружу его публикует nginx с Let's Encrypt HTTPS.
+
 ## GitHub Actions secrets
 В окружении `Oracle` завести те же секреты, что у VPN-бота:
 - `VPS_HOST`

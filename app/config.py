@@ -89,6 +89,17 @@ class Settings(BaseSettings):
     ui_show_admin_commands: bool = Field(default=False, alias="UI_SHOW_ADMIN_COMMANDS")
     ui_show_power_user_commands: bool = Field(default=False, alias="UI_SHOW_POWER_USER_COMMANDS")
     ui_reply_keyboard_enabled: bool = Field(default=True, alias="UI_REPLY_KEYBOARD_ENABLED")
+    web_enabled: bool = Field(default=False, alias="WEB_ENABLED")
+    web_host: str = Field(default="127.0.0.1", alias="WEB_HOST")
+    web_port: int = Field(default=8081, alias="WEB_PORT")
+    web_public_url: str = Field(default="https://books.technique.ink", alias="WEB_PUBLIC_URL")
+    web_auth_secret: str | None = Field(default=None, alias="WEB_AUTH_SECRET")
+    web_pair_code_ttl_seconds: int = Field(default=600, alias="WEB_PAIR_CODE_TTL_SECONDS")
+    web_session_days: int = Field(default=90, alias="WEB_SESSION_DAYS")
+    web_max_sessions_per_user: int = Field(default=5, alias="WEB_MAX_SESSIONS_PER_USER")
+    web_download_max_mb: int = Field(default=45, alias="WEB_DOWNLOAD_MAX_MB")
+    web_download_concurrency: int = Field(default=1, alias="WEB_DOWNLOAD_CONCURRENCY")
+    web_cookie_secure: bool = Field(default=True, alias="WEB_COOKIE_SECURE")
 
     @property
     def base_url(self) -> str:
@@ -156,3 +167,11 @@ class Settings(BaseSettings):
     @property
     def admin_ids(self) -> set[int]:
         return {int(item.strip()) for item in self.admin_user_ids.split(",") if item.strip().isdigit()}
+
+    @property
+    def web_public_url_normalized(self) -> str:
+        return self.web_public_url.rstrip("/")
+
+    @property
+    def web_configured(self) -> bool:
+        return bool(self.web_enabled and self.web_auth_secret)

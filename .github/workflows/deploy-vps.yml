@@ -31,3 +31,5 @@ jobs:
             export SYSTEMD_PAGER=cat
             sudo -n /usr/bin/systemctl restart flibusta-tg-bot
             sudo -n /usr/bin/systemctl status flibusta-tg-bot
+            sleep 2
+            curl -fsS http://127.0.0.1:8081/health >/dev/null

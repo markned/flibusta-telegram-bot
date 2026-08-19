@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import secrets
 import shutil
 import sys
 import tempfile
@@ -44,6 +45,16 @@ MANAGED_VALUES = {
     "UI_SHOW_ADMIN_COMMANDS": "false",
     "UI_SHOW_POWER_USER_COMMANDS": "false",
     "UI_REPLY_KEYBOARD_ENABLED": "true",
+    "WEB_ENABLED": "true",
+    "WEB_HOST": "127.0.0.1",
+    "WEB_PORT": "8081",
+    "WEB_PUBLIC_URL": "https://books.technique.ink",
+    "WEB_PAIR_CODE_TTL_SECONDS": "600",
+    "WEB_SESSION_DAYS": "90",
+    "WEB_MAX_SESSIONS_PER_USER": "5",
+    "WEB_DOWNLOAD_MAX_MB": "45",
+    "WEB_DOWNLOAD_CONCURRENCY": "1",
+    "WEB_COOKIE_SECURE": "true",
 }
 
 _REMOVED_COMMENT_MARKERS = (
@@ -100,6 +111,11 @@ def normalize_env(path: Path) -> tuple[int, int]:
             kept.append("")
         kept.append("# Deterministic search / low-memory production defaults")
         kept.extend(f"{key}={MANAGED_VALUES[key]}" for key in missing)
+
+    if not any(line.startswith("WEB_AUTH_SECRET=") and line.split("=", 1)[1].strip() for line in kept):
+        kept = [line for line in kept if not line.startswith("WEB_AUTH_SECRET=")]
+        kept.append(f"WEB_AUTH_SECRET={secrets.token_urlsafe(32)}")
+        missing.append("WEB_AUTH_SECRET")
 
     compact: list[str] = []
     for line in kept:
