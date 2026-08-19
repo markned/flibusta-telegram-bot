@@ -82,6 +82,8 @@ def formats_keyboard(details:BookDetails,preferred_format:str|None,is_favorite:b
  if row: kb.row(*row)
  kb.row(InlineKeyboardButton(text='✅ В избранном' if is_favorite else '⭐ В избранное',callback_data=f"{'fav_remove' if is_favorite else 'fav_add'}:{details.book_id}"))
  for item in author_buttons: kb.row(InlineKeyboardButton(text=f'👤 {item.name[:48]}',callback_data=f'bauthor:{item.author_id}'))
+ for item in details.series[:2]:
+  if item.series_id: kb.row(InlineKeyboardButton(text=f'📚 {item.name[:48]}',callback_data=f'series:{item.series_id}'))
  if details.annotation and len(details.annotation)>annotation_max_chars: kb.row(InlineKeyboardButton(text='📖 Описание полностью',callback_data=f'annotation:{details.book_id}'))
  return kb.as_markup()
 def main_reply_keyboard():

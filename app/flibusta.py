@@ -172,6 +172,11 @@ class FlibustaClient:
         response = await self._get(page_url)
         return parse_author_page(response.text, author_id, limit=limit)
 
+    async def series_books(self, series_id: str, limit: int = 80) -> tuple[str, list[SearchResult]]:
+        page_url = urljoin(self.base_url + "/", f"sequence/{series_id}")
+        response = await self._get(page_url)
+        return parse_series_page(response.text, series_id, limit=limit)
+
     async def details(self, book_id: str) -> BookDetails:
         page_url = urljoin(self.base_url + "/", f"b/{book_id}")
         response = await self._get(page_url)
@@ -403,6 +408,20 @@ def parse_author_page(markup: str, author_id: str, limit: int = 40) -> tuple[str
     return author_name or f"Автор {author_id}", normalized_books
 
 
+def parse_series_page(markup: str, series_id: str, limit: int = 80) -> tuple[str, list[SearchResult]]:
+    soup = BeautifulSoup(markup, "lxml")
+    heading = next(
+        (
+            _clean_text(node.get_text(" ", strip=True))
+            for node in soup.find_all(["h1", "h2"])
+            if _clean_text(node.get_text(" ", strip=True)).casefold() not in {"флибуста", "книги"}
+        ),
+        "",
+    )
+    name = re.sub(r"^(?:книжная\s+)?серия\s*[:—-]?\s*", "", heading, flags=re.I)
+    return name or f"Серия {series_id}", parse_search_results(markup, limit)
+
+
 def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) -> BookDetails:
     soup = BeautifulSoup(markup, "lxml")
     heading = _extract_book_heading(soup)
@@ -431,6 +450,7 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
     annotation = _extract_annotation(soup)
     cover_url = _extract_cover_url(soup, base_url)
     formats = _extract_formats(soup, base_url, book_id)
+    series = _extract_series(soup)
 
     return BookDetails(
         book_id=book_id,
@@ -446,7 +466,27 @@ def parse_book_details(markup: str, base_url: str, book_id: str, page_url: str) 
         formats=formats,
         page_url=page_url,
         cover_url=cover_url,
+        series=series,
     )
+
+
+def _extract_series(soup: BeautifulSoup) -> list[SeriesRef]:
+    result: list[SeriesRef] = []
+    seen: set[tuple[str | None, str]] = set()
+    for link in soup.select('a[href*="/sequence/"]'):
+        href = str(link.get("href", ""))
+        match = re.search(r"/sequence/(\d+)", href)
+        name = _clean_text(link.get_text(" ", strip=True))
+        if not name:
+            continue
+        nearby = _clean_text(link.parent.get_text(" ", strip=True)) if link.parent else name
+        position_match = re.search(r"(?:#|№|номер\s*)(\d+(?:\.\d+)?)", nearby, re.I)
+        item = SeriesRef(match.group(1) if match else None, name, position_match.group(1) if position_match else None)
+        key = (item.series_id, item.name.casefold())
+        if key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
 
 
 def _extract_author_name(soup: BeautifulSoup, author_id: str) -> str:

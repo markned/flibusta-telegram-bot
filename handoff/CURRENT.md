@@ -22,6 +22,9 @@
 - Web CSS avoids flex/grid and `min()` so old e-ink WebKit engines retain readable spacing and controls.
 - The web home shows up to six recent unique books; reader delivery leads to a clear success screen.
 - Search/download/reader delivery/favorites/history/admin flows remain intact.
+- Book cards expose reliable Flibusta series links in Telegram and web; series pages reuse bounded catalog parsing and SQLite caching.
+- Web access shows the number of active browser sessions and lets a user revoke all of them from Telegram.
+- Web favorites support local title/author filtering, deterministic sorting and pagination.
 
 ## Search reliability
 
@@ -37,6 +40,7 @@
 - A failed primary query no longer prevents the remaining bounded fallback queries from running.
 - Fresh SQLite cache is preferred; recent stale data can be used only when Flibusta fails.
 - A small in-memory circuit breaker prevents repeated failing calls.
+- Polite search prefixes are stripped deterministically; no-result telemetry is stored only as daily aggregates without query text.
 
 ## Production configuration additions
 
@@ -64,6 +68,8 @@ Legacy AI/discovery variables are ignored for rolling-deploy safety and should b
 - No downloaded books stored permanently.
 - No real network calls in tests.
 - Keep Kindle/PocketBook worker concurrency at 1 in production.
+- `scripts/backup_sqlite.py` creates private, integrity-checked SQLite snapshots with bounded retention.
+- `/admin_health` reports local SQLite/WAL/disk/cache/queue/session/search-miss health without a network probe or sensitive values.
 
 ## Performance and cloud development
 

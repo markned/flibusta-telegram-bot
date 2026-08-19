@@ -8,5 +8,7 @@ __pycache__/
 *.pyc
 user_prefs.json
 bot.db
+bot.db-*
+backups/
 .pytest_cache/
 .DS_Store

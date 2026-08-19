@@ -16,6 +16,7 @@ _EN_TO_RU_KEYBOARD = str.maketrans(
 def build_search_plan(query: str, *, max_fallback_queries: int = 2) -> SearchPlan:
     decision = route_intent(query)
     cleaned = clean_query(decision.cleaned_query or query)
+    cleaned = _strip_search_noise(cleaned)
     mode = {
         IntentKind.EXACT_SEARCH: SearchMode.EXACT,
         IntentKind.AUTHOR_SEARCH: SearchMode.AUTHOR,
@@ -32,7 +33,7 @@ def build_search_plan(query: str, *, max_fallback_queries: int = 2) -> SearchPla
     fallback: list[str] = []
     if mode in {SearchMode.EXACT, SearchMode.FALLBACK}:
         words = cleaned.split()
-        if len(words) >= 2 and words[0].casefold() in {"книга", "роман", "повесть"}:
+        if len(words) >= 2 and words[0].casefold() in {"книга", "книгу", "роман", "повесть"}:
             fallback.append(" ".join(words[1:]))
         if len(words) >= 4:
             fallback.extend((" ".join(words[:-1]), " ".join(words[1:])))
@@ -55,6 +56,11 @@ def correct_keyboard_layout(query: str) -> str | None:
         return None
     corrected = query.lower().translate(_EN_TO_RU_KEYBOARD)
     return clean_query(corrected)
+
+
+def _strip_search_noise(query: str) -> str:
+    cleaned = re.sub(r"^(?:пожалуйста[,.]?\s*)?(?:найди(?:те)?|покажи(?:те)?|скачай(?:те)?|ищу)\s+", "", query, flags=re.I)
+    return cleaned.strip() or query
 
 
 def _dedupe(values: list[str]) -> list[str]:

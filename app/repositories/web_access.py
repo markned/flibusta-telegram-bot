@@ -18,6 +18,13 @@ class WebSession:
     expires_at: str
 
 
+@dataclass(frozen=True)
+class WebSessionInfo:
+    created_at: str
+    last_seen_at: str
+    expires_at: str
+
+
 class WebAccessRepository:
     def __init__(self, db: Database, secret: str) -> None:
         if not secret:
@@ -140,6 +147,29 @@ class WebAccessRepository:
                 (self._hash(f"session:{token}"),),
             )
             await conn.commit()
+
+    async def list_sessions(self, user_id: int) -> list[WebSessionInfo]:
+        async with self.db.connect() as conn:
+            rows = await (
+                await conn.execute(
+                    "SELECT created_at, last_seen_at, expires_at FROM web_sessions WHERE user_id = ? AND expires_at >= ? ORDER BY last_seen_at DESC",
+                    (user_id, datetime.now(UTC).isoformat()),
+                )
+            ).fetchall()
+        return [WebSessionInfo(**dict(row)) for row in rows]
+
+    async def revoke_all_sessions(self, user_id: int) -> int:
+        async with self.db.connect() as conn:
+            cursor = await conn.execute("DELETE FROM web_sessions WHERE user_id = ?", (user_id,))
+            await conn.commit()
+        return cursor.rowcount
+
+    async def active_session_count(self) -> int:
+        async with self.db.connect() as conn:
+            row = await (
+                await conn.execute("SELECT COUNT(*) FROM web_sessions WHERE expires_at >= ?", (datetime.now(UTC).isoformat(),))
+            ).fetchone()
+        return int(row[0])
 
     async def prune_expired(self) -> tuple[int, int]:
         now = datetime.now(UTC).isoformat()

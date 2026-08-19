@@ -49,6 +49,7 @@ from app.repositories.download_history import DownloadHistoryRepository, Downloa
 from app.repositories.last_books import LastBooksRepository
 from app.repositories.access import AccessRepository
 from app.repositories.web_access import WebAccessRepository
+from app.repositories.search_stats import SearchStatsRepository
 from app.services.email_sender import EmailSender
 from app.services.conversion import ConversionService
 from app.services.covers.download import download_cover
@@ -157,6 +158,7 @@ download_history_repo = DownloadHistoryRepository(db)
 last_books_repo = LastBooksRepository(db)
 access_repo = AccessRepository(db)
 web_access_repo = WebAccessRepository(db, settings.web_auth_secret) if settings.web_auth_secret else None
+search_stats_repo = SearchStatsRepository(db)
 flibusta = CachedFlibustaClient(
     raw_flibusta,
     cache_repo,
@@ -167,6 +169,7 @@ flibusta = CachedFlibustaClient(
         "smart_search": settings.cache_smart_search_ttl_seconds,
         "book_details": settings.cache_book_details_ttl_seconds,
         "author_books": settings.cache_author_books_ttl_seconds,
+        "series_books": settings.cache_author_books_ttl_seconds,
     },
     stale_if_error_seconds=settings.cache_stale_if_error_seconds,
     circuit_breaker_failures=settings.flibusta_circuit_breaker_failures,
@@ -839,6 +842,33 @@ async def show_author_books(callback: CallbackQuery) -> None:
 async def noop(callback: CallbackQuery) -> None:
     await callback_answer(callback)
 
+
+@router.callback_query(F.data.startswith("series:"))
+async def show_series_books(callback: CallbackQuery) -> None:
+    series_id = callback.data.split(":", 1)[1]
+    await callback_answer(callback)
+    if not series_id.isdigit():
+        return
+    try:
+        name, books = await flibusta.series_books(series_id, limit=80)
+    except FlibustaError as exc:
+        await callback.message.answer(str(exc))
+        return
+    if not books:
+        await callback.message.answer("Книги этой серии пока не найдены.")
+        return
+    session = _create_search_session(
+        callback.from_user.id,
+        callback.message.chat.id,
+        f"series:{series_id}",
+        books,
+        title=f"Серия: <b>{escape(name)}</b>",
+    )
+    await callback.message.answer(
+        _search_results_text(session),
+        reply_markup=_search_results_keyboard(session),
+    )
+
 @router.callback_query(F.data.startswith("retry_"))
 async def retry_search(callback: CallbackQuery) -> None:
     action, sid = callback.data.split(":",1)
@@ -1316,6 +1346,10 @@ def _allow_search(user_id: int) -> bool:
     items.append(time()); search_timestamps[user_id] = items; return True
 
 async def _send_no_results(message: Message, query: str, *, progress: Message | None = None) -> None:
+    try:
+        await search_stats_repo.record_miss(query, settings.search_fallback_max_queries)
+    except Exception:
+        logger.warning("could not aggregate search miss", exc_info=True)
     sid=uuid4().hex[:10]; retry_sessions[sid]=query; _prune_sessions(retry_sessions)
     kb=InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(text="Искать короче",callback_data=f"retry_short:{sid}"))
@@ -1496,6 +1530,9 @@ async def main() -> None:
             deliveries_repo=kindle_deliveries_repo,
             kindle_queue=kindle_queue,
             admin_ids=settings.admin_ids,
+            db=db,
+            web_access_repo=web_access_repo,
+            search_stats_repo=search_stats_repo,
         )
     )
     dispatcher.include_router(router)
@@ -1527,6 +1564,7 @@ async def main() -> None:
                     cover_resolver=cover_resolver,
                     cover_download_max_bytes=settings.cover_max_download_mb * 1024 * 1024,
                     cover_download_timeout_seconds=settings.cover_lookup_timeout_seconds,
+                    search_stats_repo=search_stats_repo,
                 ),
                 host=settings.web_host,
                 port=settings.web_port,

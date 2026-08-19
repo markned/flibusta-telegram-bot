@@ -96,6 +96,15 @@ class CachedFlibustaClient:
             source_timeout_seconds=self.source_timeout_seconds,
         )
 
+    async def series_books(self, series_id: str, limit: int = 80):
+        return await self._cached(
+            "series_books",
+            f"{series_id}:{limit}",
+            lambda: self.client.series_books(series_id, limit),
+            lambda pair: (pair[0], [SearchResult(**row) for row in pair[1]]),
+            source_timeout_seconds=self.source_timeout_seconds,
+        )
+
     async def details(self, book_id: str):
         return await self._cached(
             "book_details",
