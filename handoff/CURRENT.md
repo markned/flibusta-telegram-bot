@@ -81,3 +81,9 @@ Legacy AI/discovery variables are ignored for rolling-deploy safety and should b
 - Codex Cloud bootstrap scripts live in `.codex/`; see `docs/codex-cloud.md`.
 - Cloud development does not replace production: tested PRs merge to `main`,
   then the existing GitHub Actions workflow deploys Oracle.
+
+## Codex development workflows
+
+Project skills now live in `.agents/skills/`, optional agents in `.codex/agents/*.toml`.
+See `docs/codex-skills.md` for pinned upstreams, routing, validation and Cloud setup.
+These are development-only; production code and requirements are unchanged.

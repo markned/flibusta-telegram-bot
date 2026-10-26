@@ -1,26 +1,26 @@
-# AGENTS.md
+# Project rules
 
-This repo is a small aiogram + SQLite Telegram bot. Keep changes boring, modular, and cheap to operate.
+Полка is an aiogram + aiohttp bot for a low-memory Oracle VPS. Read
+`handoff/CURRENT.md` once for architecture; use `.agents/skills/scoped-change/SKILL.md`
+for development routing and `docs/codex-routing.json` for task-specific stages.
 
-## Hard constraints
-- Target is a low-memory VPS.
-- SQLite only. Do **not** add Redis, Celery, RabbitMQ, Postgres, vector DBs, or external search services.
-- AI is an optional enhancement, never a dependency for exact search.
-- If AI fails, deterministic search must still work.
-- Final book recommendations must point to real Flibusta `book_id` values.
-- Do not store downloaded book files permanently.
-- Do not expose secrets in logs, docs, tests, or examples.
-- Tests must not make real network calls.
+- SQLite only; no Redis, PostgreSQL, brokers, vector DBs or external search services.
+- Deterministic SearchService and Flibusta are the catalog path. AI recommendations
+  and their scheduler were removed; do not restore them as part of routine work.
+- Preserve search, downloads, reader delivery, favorites, history and access control.
+- Book results require real catalog book_id. Books are temporary; secrets stay private.
+- Tests mock external Telegram, Flibusta and SMTP. No real downloads or delivery.
+- Keep production reader concurrency 1 and resource bounds in CURRENT.md.
+- One agent by default. Delegate only independent substantial work with narrow scopes;
+  reuse findings, return compact results, and avoid repeated reviews of unchanged code.
+- Run focused checks, then `make check`; report failures honestly. No deploy or merge
+  unless separately requested. A main merge triggers the existing production workflow.
 
-## Working agreement
-1. Read `handoff/CURRENT.md` and `.codex/instructions.md` first.
-2. Prefer the narrowest agent/skill that fits the task.
-3. Keep write scopes separate when multiple agents work in parallel.
-4. Preserve existing search, download, Kindle, favorites, and history flows.
-5. Before handoff, run `make check` and update `handoff/CURRENT.md` if the task materially changes repo state.
+## Agent skills
 
-## Codex Cloud
-- Setup: `bash .codex/cloud-setup.sh`
-- Maintenance: `bash .codex/cloud-maintenance.sh`
-- Use a dummy `TELEGRAM_BOT_TOKEN` for tests; never copy production secrets.
-- Cloud work should finish as a tested PR. Merging to `main` deploys Oracle via GitHub Actions.
+Skills are discovered in `.agents/skills/`; explicit `$skill-name` has priority.
+Run only relevant stages; interviews and ticket splitting are not routine overhead.
+Planning skills read `docs/agents/issue-tracker.md` (local Markdown, no external writes)
+and `docs/agents/domain.md`. Full inventory and update notes: `docs/codex-skills.md`.
+Cloud setup: `bash .codex/cloud-setup.sh`; maintenance: `bash .codex/cloud-maintenance.sh`.
+Development tooling stays outside production requirements.

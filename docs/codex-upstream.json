@@ -1,0 +1,421 @@
+{
+  "format": 1,
+  "installation": "project-local vendored skills; no plugin bootstrap, hooks or MCP",
+  "skills": [
+    {
+      "name": "grill-me",
+      "repository": "https://github.com/mattpocock/skills",
+      "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+      "upstream_path": "skills/productivity/grill-me",
+      "upstream_sha256": {
+        "SKILL.md": "caaf8b8de1684f96e26b28f3c29189db5c89cce4b73e1c93d86164f66ef88637",
+        "agents/openai.yaml": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+      },
+      "license": "docs/licenses/matt-LICENSE",
+      "adaptations": [
+        "Removed Claude frontmatter; converted Skill-tool entrypoints to sibling SKILL.md loading; optional bounded investigation instead of mandatory subagents; project tracker/domain references."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "7f652f2ffc20f64373e3a649bc8fcc500a85071df47187670431a417b3633587",
+        "agents/openai.yaml": "c061e39c3e0f9d865fb1b97556d485704af2a8a58f4b8221a8917a5c2074a32b"
+      },
+      "dependencies": [
+        "flibusta-grilling"
+      ]
+    },
+    {
+      "name": "flibusta-grilling",
+      "repository": "https://github.com/mattpocock/skills",
+      "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+      "upstream_path": "skills/productivity/grilling",
+      "upstream_sha256": {
+        "SKILL.md": "befdff1e27a1dfe2a294d5871169ac1afe16d983911daa4f32627514a48c1e15",
+        "agents/openai.yaml": "1411d7df7d99b7e621a1ff8283c8133cc2464be63d064e52d8ce169c6800ee9b"
+      },
+      "license": "docs/licenses/matt-LICENSE",
+      "adaptations": [
+        "Removed Claude frontmatter; converted Skill-tool entrypoints to sibling SKILL.md loading; optional bounded investigation instead of mandatory subagents; project tracker/domain references.",
+        "Project alias flibusta-grilling avoids collision with existing user-level grilling."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "eb7cd48d825c1ddc1261d461c3c8178ad47c989cdf0d426de17b39208e907c5a",
+        "agents/openai.yaml": "43ba1da595c9516a716a38542fa6e4e1faad021f4b9861c669c332e3f555a5f4"
+      },
+      "dependencies": [],
+      "upstream_name": "grilling"
+    },
+    {
+      "name": "grill-with-docs",
+      "repository": "https://github.com/mattpocock/skills",
+      "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+      "upstream_path": "skills/engineering/grill-with-docs",
+      "upstream_sha256": {
+        "SKILL.md": "7de372c13488f1ee96cc11cd8907b56b6809cc93eef776eeddd37de6b6cbe3fe",
+        "agents/openai.yaml": "94cd0ab161fb468a836349f5ed482ba58ce8e709a05c57ce533d739dbd35cca9"
+      },
+      "license": "docs/licenses/matt-LICENSE",
+      "adaptations": [
+        "Removed Claude frontmatter; converted Skill-tool entrypoints to sibling SKILL.md loading; optional bounded investigation instead of mandatory subagents; project tracker/domain references."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "cee500c493d794f50d50c3f9f71f17d50fdace0d945d365625e1fd80a1be3e32",
+        "agents/openai.yaml": "94cd0ab161fb468a836349f5ed482ba58ce8e709a05c57ce533d739dbd35cca9"
+      },
+      "dependencies": [
+        "flibusta-grilling",
+        "domain-modeling"
+      ]
+    },
+    {
+      "name": "domain-modeling",
+      "repository": "https://github.com/mattpocock/skills",
+      "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+      "upstream_path": "skills/engineering/domain-modeling",
+      "upstream_sha256": {
+        "GLOSSARY-FORMAT.md": "21dcc40cdec8e151a829b98ab1517c1867bc444e3665134a98c6983411996801",
+        "SKILL.md": "7b925d7b1e341a2eeae33ad68a8a8c0ab889a38ddd22a7598e4c240e5a7556a3",
+        "ADR-FORMAT.md": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0",
+        "agents/openai.yaml": "f6bf2aa996c6e6f53fdd0708e18a0d16a56aed8322cca59fedbe3c0d2c75f06b"
+      },
+      "license": "docs/licenses/matt-LICENSE",
+      "adaptations": [
+        "Removed Claude frontmatter; converted Skill-tool entrypoints to sibling SKILL.md loading; optional bounded investigation instead of mandatory subagents; project tracker/domain references."
+      ],
+      "installed_sha256": {
+        "ADR-FORMAT.md": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0",
+        "GLOSSARY-FORMAT.md": "21dcc40cdec8e151a829b98ab1517c1867bc444e3665134a98c6983411996801",
+        "SKILL.md": "7b925d7b1e341a2eeae33ad68a8a8c0ab889a38ddd22a7598e4c240e5a7556a3",
+        "agents/openai.yaml": "f6bf2aa996c6e6f53fdd0708e18a0d16a56aed8322cca59fedbe3c0d2c75f06b"
+      },
+      "dependencies": []
+    },
+    {
+      "name": "to-spec",
+      "repository": "https://github.com/mattpocock/skills",
+      "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+      "upstream_path": "skills/engineering/to-spec",
+      "upstream_sha256": {
+        "SKILL.md": "43ad9cf318e5e7d3d1fa360253a37021796dc87a0c2e595ad262661a10f85088",
+        "agents/openai.yaml": "1c5b4d1e3d8e52287ef19cc2742fdbbfae1914ac75d33af3e4c8174f08cc55bb"
+      },
+      "license": "docs/licenses/matt-LICENSE",
+      "adaptations": [
+        "Removed Claude frontmatter; converted Skill-tool entrypoints to sibling SKILL.md loading; optional bounded investigation instead of mandatory subagents; project tracker/domain references."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "0e480b51c5f3536a4b2e04dc377896941fb64b75dd0930cd69b70f1576dfb5e2",
+        "agents/openai.yaml": "37828cc6c0f903575798fe17374b0bb6fd28e59bc622d7fb32df76f55946d2b3"
+      },
+      "dependencies": [
+        "docs/agents/issue-tracker.md",
+        "docs/agents/domain.md"
+      ]
+    },
+    {
+      "name": "to-tickets",
+      "repository": "https://github.com/mattpocock/skills",
+      "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+      "upstream_path": "skills/engineering/to-tickets",
+      "upstream_sha256": {
+        "SKILL.md": "56ec23c5b2782785d4e65bff9e315b6d3aeb4ef977c174a219e99489fada1995",
+        "agents/openai.yaml": "21bc6215fffcd7614e9f772bb1760e87cc5fc7dcc707e7d282bc9414267a6090"
+      },
+      "license": "docs/licenses/matt-LICENSE",
+      "adaptations": [
+        "Removed Claude frontmatter; converted Skill-tool entrypoints to sibling SKILL.md loading; optional bounded investigation instead of mandatory subagents; project tracker/domain references."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "a3b2e6ede524d152dcbc96c1e5c1583a854ad4a679e6ad629c775605ec2a3f85",
+        "agents/openai.yaml": "836fa8476e3ab9bc1bcfca13bfbebadf600fba6c6e8b69407a1e8a1f2b9d87b1"
+      },
+      "dependencies": [
+        "docs/agents/issue-tracker.md",
+        "docs/agents/domain.md"
+      ]
+    },
+    {
+      "name": "setup-matt-pocock-skills",
+      "repository": "https://github.com/mattpocock/skills",
+      "commit": "5beb35b040e3de97e54fa9e386d7e42d15c295c2",
+      "upstream_path": "skills/engineering/setup-matt-pocock-skills",
+      "upstream_sha256": {
+        "issue-tracker-gitlab.md": "591a9e7057382aaccdfbed3f7ea3f2ad07e0cd29f012d18b82ee4e485fd81e24",
+        "domain.md": "593a7042218689f1d24df89df14eaf0a20e19e0d0a7d479a01947ac78f0784b9",
+        "triage-labels.md": "ae512af838c78b8750471c42cd2b20fa32319553e61d84c9a23d171b40ce14aa",
+        "SKILL.md": "f148858ffb7f63c03c06fca06e6fdb1d91a35c6b293244b8fdfacd5f4cc028c4",
+        "issue-tracker-github.md": "f0653fe106dd8ee7b33be27bd7fe3104b40555896cb45f61997aed20467020c3",
+        "issue-tracker-local.md": "7dcda20a2eb4bdc89b95d1143423c0691309921cadae3132e6424f371030506e",
+        "agents/openai.yaml": "9527de0110541c45712319025155aeab8dc7d77c6ed6e5e83271bab1851ab939"
+      },
+      "license": "docs/licenses/matt-LICENSE",
+      "adaptations": [
+        "Removed Claude frontmatter; converted Skill-tool entrypoints to sibling SKILL.md loading; optional bounded investigation instead of mandatory subagents; project tracker/domain references."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "d03cc9cbdb1d4b85386f314799f3e8f876c480df50ccee1c7a34642c44321907",
+        "agents/openai.yaml": "9527de0110541c45712319025155aeab8dc7d77c6ed6e5e83271bab1851ab939",
+        "domain.md": "593a7042218689f1d24df89df14eaf0a20e19e0d0a7d479a01947ac78f0784b9",
+        "issue-tracker-github.md": "f0653fe106dd8ee7b33be27bd7fe3104b40555896cb45f61997aed20467020c3",
+        "issue-tracker-gitlab.md": "591a9e7057382aaccdfbed3f7ea3f2ad07e0cd29f012d18b82ee4e485fd81e24",
+        "issue-tracker-local.md": "7dcda20a2eb4bdc89b95d1143423c0691309921cadae3132e6424f371030506e",
+        "triage-labels.md": "ae512af838c78b8750471c42cd2b20fa32319553e61d84c9a23d171b40ce14aa"
+      },
+      "dependencies": []
+    },
+    {
+      "name": "systematic-debugging",
+      "repository": "https://github.com/obra/superpowers",
+      "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+      "upstream_path": "skills/systematic-debugging",
+      "upstream_sha256": {
+        "test-pressure-1.md": "0b6a915db0054577819834c79be9eb614e97bddba10d73768e1fbe91cfed048a",
+        "condition-based-waiting.md": "e89fec8400d6cd50f43407cec9fab50976ba4d55d0ec2eb51c0bd68036b54c26",
+        "test-pressure-2.md": "b2030aeffba07050e8ad573ddf87486457c4a016a786bb326235bebd856f2016",
+        "CREATION-LOG.md": "c24733a5b1821bd6bed1fc950261f0b9f4e90097e0bbb96459d8179713730789",
+        "test-academic.md": "fe2ba480d78ac0d686dc025f41c2a32a43d642bf533f91b0c6053a04d35d6486",
+        "defense-in-depth.md": "1e175fb86fc357e58c6aebf5441e481e1b7868b4380c0456b63a17eefbd18ba7",
+        "SKILL.md": "51c6435d98c83c42c96ba7c35725a0b2c376cd487fb1a4e6bd0ddbe7e33ef202",
+        "test-pressure-3.md": "96b50a52e2c7989c9cf20fb752c47c1e9a3a70dc362f8f7989f8f5b64dac7708",
+        "root-cause-tracing.md": "75b933b6a8c40bdb2031b10f21654395b56ec6ab6bc7b018c18d3fe57aeb7fb8",
+        "condition-based-waiting-example.ts": "40ae5ebe497fdf310200e43fe986552546d0a22837c0d39e855db1cfd33eb88e",
+        "find-polluter.sh": "dd7b8f13c4cc2a24b33ff87b18da9248f3e1c80a085c3316224f69ff0fa5c43c"
+      },
+      "license": "docs/licenses/superpowers-LICENSE",
+      "adaptations": [
+        "Converted superpowers namespaced references to local sibling skills; documented Python test commands and safety scope."
+      ],
+      "installed_sha256": {
+        "CREATION-LOG.md": "c24733a5b1821bd6bed1fc950261f0b9f4e90097e0bbb96459d8179713730789",
+        "SKILL.md": "ff68138bb4bb6a9ca96221705aa48d2cf98f8e3a7cc6b45a69578538c6f5b605",
+        "condition-based-waiting-example.ts": "40ae5ebe497fdf310200e43fe986552546d0a22837c0d39e855db1cfd33eb88e",
+        "condition-based-waiting.md": "e89fec8400d6cd50f43407cec9fab50976ba4d55d0ec2eb51c0bd68036b54c26",
+        "defense-in-depth.md": "1e175fb86fc357e58c6aebf5441e481e1b7868b4380c0456b63a17eefbd18ba7",
+        "find-polluter.sh": "dd7b8f13c4cc2a24b33ff87b18da9248f3e1c80a085c3316224f69ff0fa5c43c",
+        "root-cause-tracing.md": "75b933b6a8c40bdb2031b10f21654395b56ec6ab6bc7b018c18d3fe57aeb7fb8",
+        "test-academic.md": "fe2ba480d78ac0d686dc025f41c2a32a43d642bf533f91b0c6053a04d35d6486",
+        "test-pressure-1.md": "0b6a915db0054577819834c79be9eb614e97bddba10d73768e1fbe91cfed048a",
+        "test-pressure-2.md": "b2030aeffba07050e8ad573ddf87486457c4a016a786bb326235bebd856f2016",
+        "test-pressure-3.md": "96b50a52e2c7989c9cf20fb752c47c1e9a3a70dc362f8f7989f8f5b64dac7708"
+      },
+      "dependencies": [
+        "test-driven-development",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "name": "test-driven-development",
+      "repository": "https://github.com/obra/superpowers",
+      "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+      "upstream_path": "skills/test-driven-development",
+      "upstream_sha256": {
+        "writing-good-tests.md": "51471c853306ff92ca8bb41dcaea05f31c0e46b03651f8f3c99754b7172f4ae1",
+        "SKILL.md": "64b03fce4aee5a97a93160cea8111f3ba13a17b7c001db4bd5836d67fd10705d"
+      },
+      "license": "docs/licenses/superpowers-LICENSE",
+      "adaptations": [
+        "Converted superpowers namespaced references to local sibling skills; documented Python test commands and safety scope."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "f7c72ec2ebaf24baf00ef59014fb164191fc192eead78655ef27e59724f1e1f3",
+        "writing-good-tests.md": "51471c853306ff92ca8bb41dcaea05f31c0e46b03651f8f3c99754b7172f4ae1"
+      },
+      "dependencies": []
+    },
+    {
+      "name": "verification-before-completion",
+      "repository": "https://github.com/obra/superpowers",
+      "commit": "2ce8aa15d05bd57213e6f746f953aafb7ded7a8b",
+      "upstream_path": "skills/verification-before-completion",
+      "upstream_sha256": {
+        "SKILL.md": "2befe7fc55bcadaa3d97dd9e8efeb633d2561c0ebe74c5a8b17c4d9e7e4520b3"
+      },
+      "license": "docs/licenses/superpowers-LICENSE",
+      "adaptations": [
+        "Converted superpowers namespaced references to local sibling skills; documented Python test commands and safety scope."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "8d183c114b1d0ff72f1dc9a96217769913557749ec02d22c081e170f58846196"
+      },
+      "dependencies": []
+    },
+    {
+      "name": "differential-review",
+      "repository": "https://github.com/trailofbits/skills",
+      "commit": "196a9073ab10d35bacf111f945e02c00b2c6883a",
+      "upstream_path": "plugins/differential-review/skills/differential-review",
+      "upstream_sha256": {
+        "reporting.md": "0016876dc6f158e926448bff1b6f634796757c7afe09dff177cfe30250724fc4",
+        "methodology.md": "16b335d24cf2145e3dc4a37f50056550d29db2efa20e6df78fec95ec1e6fb0b4",
+        "patterns.md": "52abb18abbc73502a3d3b2f36a7a035adc1db40fd812d1d5424cf065036a06e9",
+        "adversarial.md": "3cb823f38c6e551cbcf5f72325d2bb219dacdad774072519c31d50d92db19800",
+        "SKILL.md": "f9af6a8193fc1a9f8ca3c54bb8d19095a5f20c9472ca6d014488bbde50b67da0",
+        "agents/openai.yaml": "0279d56f88dc1a04d4b1941a25fa7672912a3ceb0557b13c38d069908b30ae61",
+        "assets/trail-of-bits-mark.svg": "4bf74c789b38dcf6ad762c136b6832363d27ae19fbaa9a18ec18d66ecce6ca05"
+      },
+      "license": "docs/licenses/tob-LICENSE",
+      "adaptations": [
+        "Removed Claude allowed-tools metadata; local Codex execution and optional-tool notes; no required extra plugins or subagents."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "7e06bfe8a9e8251605cea315d153ae4da541d5a56a9000308ad5da60ce52c14f",
+        "adversarial.md": "3cb823f38c6e551cbcf5f72325d2bb219dacdad774072519c31d50d92db19800",
+        "agents/openai.yaml": "0279d56f88dc1a04d4b1941a25fa7672912a3ceb0557b13c38d069908b30ae61",
+        "assets/trail-of-bits-mark.svg": "4bf74c789b38dcf6ad762c136b6832363d27ae19fbaa9a18ec18d66ecce6ca05",
+        "methodology.md": "16b335d24cf2145e3dc4a37f50056550d29db2efa20e6df78fec95ec1e6fb0b4",
+        "patterns.md": "52abb18abbc73502a3d3b2f36a7a035adc1db40fd812d1d5424cf065036a06e9",
+        "reporting.md": "6ddda4e24f575e9239c8ef1312220b4d111302f880fb4dc421760a492781119c"
+      },
+      "dependencies": []
+    },
+    {
+      "name": "modern-python",
+      "repository": "https://github.com/trailofbits/skills",
+      "commit": "196a9073ab10d35bacf111f945e02c00b2c6883a",
+      "upstream_path": "plugins/modern-python/skills/modern-python",
+      "upstream_sha256": {
+        "SKILL.md": "ef774b925eb1d1fc12e4f5ddc3f5ad925ecd795315827447228c70cc44c6170c",
+        "references/pep723-scripts.md": "c348b136613a4fed8f623d6013c0c6413d2c24f2973b2e5f85b80ecc68646045",
+        "references/dependabot.md": "d3678e32472305c0ef136bca99b26c3f75554d63675930e396f26a91a97451ad",
+        "references/testing.md": "82e36068fbf28a9615d3c96e5d946e304ce8f89ae1ba7475d20934501d55b0d9",
+        "references/pyproject.md": "aec906835ec687024700d31e5c146baaabc9524129384304857b3aa81809401b",
+        "references/migration-checklist.md": "58c947e6200a91f350c9adc898af7fc6263fda41d36ae81ffd4dd923b3a1015e",
+        "references/uv-commands.md": "348cd69e8c780a0c7d54a2fac3c2956c7efe5630229782753da1685416672cdc",
+        "references/security-setup.md": "32d6754a87d5006f923706d10446cc617cb22d36cfc30b55d39bd7f4c61d864c",
+        "references/prek.md": "4be1c181c71aab64ba58573242a1c451d576a5c61ceeb400bb5827f4e1f9532a",
+        "references/ruff-config.md": "8d247862f1beaf76816ed6775f5a0c8dc96d74c7f2b71bbf1aaedc4937373b17",
+        "agents/openai.yaml": "f56c544187af5bd3c76f1cd082619644090ab7b6d8abe77d4d3115d39dced5c1",
+        "templates/pre-commit-config.yaml": "18efd067e75cba5fc71705c2f90c548a03c3cded4cd2a7f9b4a1d617e115db0d",
+        "templates/dependabot.yml": "a85ede8ff9cc3a2f63cb1fba24e65c36a5885ecc95722af15157dc5258f28a12",
+        "assets/trail-of-bits-mark.svg": "4bf74c789b38dcf6ad762c136b6832363d27ae19fbaa9a18ec18d66ecce6ca05"
+      },
+      "license": "docs/licenses/tob-LICENSE",
+      "adaptations": [
+        "Removed Claude allowed-tools metadata; local Codex execution and optional-tool notes; no required extra plugins or subagents."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "81b3d50e128918b0bd9834527ec58aa85bcc661ca04e4e1bcd8a8abebcacbcc1",
+        "agents/openai.yaml": "f56c544187af5bd3c76f1cd082619644090ab7b6d8abe77d4d3115d39dced5c1",
+        "assets/trail-of-bits-mark.svg": "4bf74c789b38dcf6ad762c136b6832363d27ae19fbaa9a18ec18d66ecce6ca05",
+        "references/dependabot.md": "d3678e32472305c0ef136bca99b26c3f75554d63675930e396f26a91a97451ad",
+        "references/migration-checklist.md": "58c947e6200a91f350c9adc898af7fc6263fda41d36ae81ffd4dd923b3a1015e",
+        "references/pep723-scripts.md": "c348b136613a4fed8f623d6013c0c6413d2c24f2973b2e5f85b80ecc68646045",
+        "references/prek.md": "4be1c181c71aab64ba58573242a1c451d576a5c61ceeb400bb5827f4e1f9532a",
+        "references/pyproject.md": "aec906835ec687024700d31e5c146baaabc9524129384304857b3aa81809401b",
+        "references/ruff-config.md": "8d247862f1beaf76816ed6775f5a0c8dc96d74c7f2b71bbf1aaedc4937373b17",
+        "references/security-setup.md": "32d6754a87d5006f923706d10446cc617cb22d36cfc30b55d39bd7f4c61d864c",
+        "references/testing.md": "82e36068fbf28a9615d3c96e5d946e304ce8f89ae1ba7475d20934501d55b0d9",
+        "references/uv-commands.md": "348cd69e8c780a0c7d54a2fac3c2956c7efe5630229782753da1685416672cdc",
+        "templates/dependabot.yml": "a85ede8ff9cc3a2f63cb1fba24e65c36a5885ecc95722af15157dc5258f28a12",
+        "templates/pre-commit-config.yaml": "18efd067e75cba5fc71705c2f90c548a03c3cded4cd2a7f9b4a1d617e115db0d"
+      },
+      "dependencies": [
+        "Optional only: uv, ruff, ty, prek and security tools for requested tooling migrations"
+      ]
+    },
+    {
+      "name": "supply-chain-risk-auditor",
+      "repository": "https://github.com/trailofbits/skills",
+      "commit": "196a9073ab10d35bacf111f945e02c00b2c6883a",
+      "upstream_path": "plugins/supply-chain-risk-auditor/skills/supply-chain-risk-auditor",
+      "upstream_sha256": {
+        "SKILL.md": "a1254b7f8d3a1731a9a7e1f9cd6c67b59cf84ed6ef7c7fb455db9a14c528ceb4",
+        "agents/openai.yaml": "7d79ce0a77aaa1e2c72939b02b285b13a84d9da85ffb965a9d1489c358cd27ab",
+        "scripts/test_model.py": "92059fe937c50f1502d71df2ddc4f123e8e2647fc0f4f7b270727ef9a2004f5c",
+        "scripts/collect.py": "fd75cffad628980a6da521b5d3a40fb5dd16c5bb9ad63a25245e5208d08abff7",
+        "scripts/test_collect.py": "ea4f25bdab0add75d500b22ba5eb9f993d3695d974cd3f92b418f5cff07e00da",
+        "scripts/uv.lock": "99598cc397a42c945abbc9d839d1c61f1852f414660ce41e2e68bd9cdf664100",
+        "scripts/render.py": "9d6091645c8a8edf5c50d24bd70ff881efa30b920d93b46ea1775ee2dd328bc7",
+        "scripts/pyproject.toml": "a79ec30039ce3bc90544b9d833f7edc128232821575736f659d2b2ca0a601f3b",
+        "scripts/model.py": "78a20954b76e81216991b57453ceddbdb867035a0d6993b98cfa05a7f8d008d3",
+        "scripts/sources.py": "4eb66952dca285b4790d1193b39f240e8015025ee054a215f4c696cbba2478e2",
+        "scripts/test_sources.py": "5c0a993d747e3ed29972272a18a14dd46b6f897bdfff7e147d0a9e9b4b4b6511",
+        "scripts/test_render.py": "319970fd010d6bf5fbf79b595e8fc918c5e74645b718f495f2479aef3ea8cc16",
+        "assets/trail-of-bits-mark.svg": "4bf74c789b38dcf6ad762c136b6832363d27ae19fbaa9a18ec18d66ecce6ca05"
+      },
+      "license": "docs/licenses/tob-LICENSE",
+      "adaptations": [
+        "Removed Claude allowed-tools metadata; local Codex execution and optional-tool notes; no required extra plugins or subagents."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "a7b82d28f5f2db9dc1b0f60345881f16b17877c9757d9ac487afab184534f300",
+        "agents/openai.yaml": "7d79ce0a77aaa1e2c72939b02b285b13a84d9da85ffb965a9d1489c358cd27ab",
+        "assets/trail-of-bits-mark.svg": "4bf74c789b38dcf6ad762c136b6832363d27ae19fbaa9a18ec18d66ecce6ca05",
+        "scripts/collect.py": "fd75cffad628980a6da521b5d3a40fb5dd16c5bb9ad63a25245e5208d08abff7",
+        "scripts/model.py": "78a20954b76e81216991b57453ceddbdb867035a0d6993b98cfa05a7f8d008d3",
+        "scripts/pyproject.toml": "a79ec30039ce3bc90544b9d833f7edc128232821575736f659d2b2ca0a601f3b",
+        "scripts/render.py": "9d6091645c8a8edf5c50d24bd70ff881efa30b920d93b46ea1775ee2dd328bc7",
+        "scripts/sources.py": "4eb66952dca285b4790d1193b39f240e8015025ee054a215f4c696cbba2478e2",
+        "scripts/test_collect.py": "ea4f25bdab0add75d500b22ba5eb9f993d3695d974cd3f92b418f5cff07e00da",
+        "scripts/test_model.py": "92059fe937c50f1502d71df2ddc4f123e8e2647fc0f4f7b270727ef9a2004f5c",
+        "scripts/test_render.py": "319970fd010d6bf5fbf79b595e8fc918c5e74645b718f495f2479aef3ea8cc16",
+        "scripts/test_sources.py": "5c0a993d747e3ed29972272a18a14dd46b6f897bdfff7e147d0a9e9b4b4b6511",
+        "scripts/uv.lock": "99598cc397a42c945abbc9d839d1c61f1852f414660ce41e2e68bd9cdf664100"
+      },
+      "dependencies": [
+        "Python >=3.11 standard library",
+        "Live audit: registry/advisory/GitHub network access",
+        "Optional authenticated gh and pip-audit/osv-scanner/npm/cargo-audit/bundler-audit for cross-checks; absence reported as coverage limit",
+        "Offline bundled script tests: pytest"
+      ]
+    },
+    {
+      "name": "insecure-defaults",
+      "repository": "https://github.com/trailofbits/skills",
+      "commit": "196a9073ab10d35bacf111f945e02c00b2c6883a",
+      "upstream_path": "plugins/insecure-defaults",
+      "upstream_sha256": {
+        "README.md": "999d8d5fcb7153eedd3d31a0826f4f72183a427836f585a357a4cdf1f1ce254f",
+        "references/fail-open-security.json": "c44057e9251b46eb14b7afa70931d0a0353567e640eb936e4fbd813bdb2b2946",
+        "references/default-credentials.md": "259a036867182b0480d0ee8be3c89fe8199a086c7084a0410adb9899cb024ab9",
+        "references/fail-open-security.md": "0e837dd32f600c7788cf34407f9ef836e8af7ed028e83019a099c036afccf39c",
+        "references/debug-features.md": "c83c54a3f8a36939b61f897f919dde8f2b41c18b8249a653c071ab749f562cf6",
+        "references/debug-features.json": "5f1ea6080d50bc4698e239dbf1c168bcbcead834b7161b754d2731bf96561e13",
+        "references/weak-crypto.md": "df424cfe3ba37fc69482b4dcd7d03b0191cb8db3b2e239a416cb295f11dc70ef",
+        "references/fallback-secrets.json": "717eb7850b4d0fec43c1a528f4b09a12050f11f9cfc0ebf3faae328365346f1a",
+        "references/weak-crypto.json": "792b59a3488fabe5b2e72254de3b0f589de926f8f6c17deb3096033be61eaa4c",
+        "references/fallback-secrets.md": "eea72165e891ff40d2d6f7eea5bc0ee20c13332856b1e5914334f06f5f984f59",
+        "references/permissive-access.md": "6e4bd7798b7d1e4065f25e57c4409764eda47ce192cd7f683f9771ed54626842",
+        "references/default-credentials.json": "46169168a34a18439aaeb882f248a73012ecc9af95cc0f31ab962067a62d9879",
+        "references/permissive-access.json": "8ee01d7845a964c255aa5d320ec372e4d71d3a14bdf6f35fe34bbeef5669e006",
+        "tests/harness.js": "61338f0652ae7569c5dbd2076194ff577a333b52b5e6331f28a7d959639d5259",
+        "tests/seed-coverage.js": "d7c05450da39c115823eb359fba14d1291051191298e73be2725a4fd341af202",
+        "tests/README.md": "f2f2c3e9334048c52e6323c54900d34ad4a80e41e70aa469b5934687550811f0",
+        "tests/run_seeds.sh": "07f5ee633b753cd41c49e30ae91c06afbca189feac196d5931ee8c3f5d6a4712",
+        "workflows/audit.js": "d11f066eebc5390233c0a1308b6f7fc5da80a7dbd79a533e43dbd8f5cbc23572",
+        ".claude-plugin/plugin.json": "0da557acf1632bf73f97e1a9ae46b8e3cd9fef48f59466b703486f9ca14a0f22",
+        "commands/audit.md": "75883127cbe66d51977f4ea1db1a8107f6df6b302bc338121e46a851d79c6518"
+      },
+      "license": "docs/licenses/tob-LICENSE",
+      "adaptations": [
+        "Converted Claude command/workflow to native serial Codex SKILL.md; copied six category corpora; excluded Claude workflow, command, tests and manifest from active installation."
+      ],
+      "installed_sha256": {
+        "SKILL.md": "bef87621659fce9d73865975ef03fe6c79ddf72157798f7d40b019d2a7da3a1c",
+        "references/debug-features.json": "5f1ea6080d50bc4698e239dbf1c168bcbcead834b7161b754d2731bf96561e13",
+        "references/debug-features.md": "c83c54a3f8a36939b61f897f919dde8f2b41c18b8249a653c071ab749f562cf6",
+        "references/default-credentials.json": "46169168a34a18439aaeb882f248a73012ecc9af95cc0f31ab962067a62d9879",
+        "references/default-credentials.md": "259a036867182b0480d0ee8be3c89fe8199a086c7084a0410adb9899cb024ab9",
+        "references/fail-open-security.json": "c44057e9251b46eb14b7afa70931d0a0353567e640eb936e4fbd813bdb2b2946",
+        "references/fail-open-security.md": "0e837dd32f600c7788cf34407f9ef836e8af7ed028e83019a099c036afccf39c",
+        "references/fallback-secrets.json": "717eb7850b4d0fec43c1a528f4b09a12050f11f9cfc0ebf3faae328365346f1a",
+        "references/fallback-secrets.md": "eea72165e891ff40d2d6f7eea5bc0ee20c13332856b1e5914334f06f5f984f59",
+        "references/permissive-access.json": "8ee01d7845a964c255aa5d320ec372e4d71d3a14bdf6f35fe34bbeef5669e006",
+        "references/permissive-access.md": "6e4bd7798b7d1e4065f25e57c4409764eda47ce192cd7f683f9771ed54626842",
+        "references/weak-crypto.json": "792b59a3488fabe5b2e72254de3b0f589de926f8f6c17deb3096033be61eaa4c",
+        "references/weak-crypto.md": "df424cfe3ba37fc69482b4dcd7d03b0191cb8db3b2e239a416cb295f11dc70ef"
+      },
+      "dependencies": []
+    }
+  ],
+  "adaptation_license": {
+    "matt": "MIT",
+    "superpowers": "MIT",
+    "tob": "CC-BY-SA-4.0"
+  },
+  "global_overlap": "Existing user-level grilling preserved. Upstream grilling is installed under the project alias flibusta-grilling to avoid a duplicate name; wrappers resolve this sibling explicitly. Cloud uses the same self-contained alias.",
+  "attribution": {
+    "matt": "Matt Pocock, MIT, modifications recorded per skill.",
+    "superpowers": "Jesse Vincent / obra contributors, MIT, modifications recorded per skill.",
+    "tob": "Trail of Bits contributors, CC BY-SA 4.0 (https://creativecommons.org/licenses/by-sa/4.0/); adapted material remains CC BY-SA 4.0; modifications recorded per skill."
+  }
+}

@@ -13,6 +13,8 @@ test-kindle:
 	.venv/bin/python -m pytest -q tests/test_kindle.py
 
 lint:
-	python3.12 -m compileall -q app tests
+	.venv/bin/python -m compileall -q app tests
+	.venv/bin/python -m ruff check app tests scripts/check_codex_skills.py
+	.venv/bin/python scripts/check_codex_skills.py
 
 check: lint test

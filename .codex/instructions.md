@@ -1,26 +1,9 @@
-# Codex instructions
+# Compatibility entry point
 
-Use this repository as a low-memory production bot, not a playground.
+`AGENTS.md` is the canonical always-loaded project policy. This file is a pointer
+for older integrations, not an additional automatically discovered Codex instruction file.
+Use `.agents/skills/` for workflows, `.codex/agents/*.toml` for optional specialists,
+and `docs/codex-skills.md` for discovery, routing, setup and diagnostics.
 
-## Defaults
-- Prefer deterministic logic before AI for exact queries.
-- Keep AI calls few, bounded, and cacheable.
-- Prefer SQLite migrations over ad-hoc schema edits.
-- Do not persist downloaded files.
-- Never print tokens, SMTP credentials, or full private e-mails unnecessarily.
-- Mock Flibusta, Telegram, SMTP, and OpenAI in tests.
-
-## Useful commands
-- `make test`
-- `make test-search`
-- `make test-kindle`
-- `make lint`
-- `make check`
-
-## Agent map
-- `search-agent`: search routing, parsing, ranking, no-results UX.
-- `recommender-agent`: AI planner, recommendation packs, candidate filtering.
-- `kindle-agent`: Kindle settings, queue, SES SMTP, delivery UX.
-- `db-agent`: SQLite schema, repositories, migrations.
-- `reviewer-agent`: correctness/security/regression review.
-- `low-memory-reviewer`: RAM, concurrency, disk, queue, and cache pressure review.
+Commands remain `make test`, `make test-search`, `make test-kindle`, `make lint`,
+`make check`. Do not copy production secrets; tests require no real Telegram token.
