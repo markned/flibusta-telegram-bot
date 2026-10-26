@@ -45,7 +45,7 @@ class CachedFlibustaClient:
         self.client = client
         self.repo = repo
         self.enabled = enabled
-        self.ttls = ttls
+        self.ttls = {"popular_books": 900, "genres": 86400, "genre_books": 3600, **ttls}
         self.stale_if_error_seconds = max(0, stale_if_error_seconds)
         self.circuit_breaker_failures = max(1, circuit_breaker_failures)
         self.circuit_breaker_cooldown_seconds = max(0.0, circuit_breaker_cooldown_seconds)
@@ -58,6 +58,7 @@ class CachedFlibustaClient:
         # same slow work twice. Tasks are removed as soon as they finish.
         self._inflight: dict[str, asyncio.Task] = {}
         self._max_inflight = 64
+        self._waiters: dict[asyncio.Task, int] = {}
 
     async def close(self) -> None:
         tasks = list(self._inflight.values())
@@ -66,6 +67,22 @@ class CachedFlibustaClient:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         await self.client.close()
+
+    async def popular_books(self):
+        return await self._cached("popular_books", "week", self.client.popular_books,
+                                  lambda rows: [SearchResult(**row) for row in rows],
+                                  source_timeout_seconds=self.source_timeout_seconds)
+
+    async def genres(self):
+        return await self._cached("genres", "all", self.client.genres, lambda rows: rows,
+                                  source_timeout_seconds=self.source_timeout_seconds)
+
+    async def genre_books(self, code):
+        if not re.fullmatch(r"[a-z0-9_]{1,48}", code):
+            raise ValueError("Invalid genre")
+        return await self._cached("genre_books", code, lambda: self.client.genre_books(code),
+                                  lambda rows: [SearchResult(**row) for row in rows],
+                                  source_timeout_seconds=self.source_timeout_seconds)
 
     async def search(self, query: str, limit: int = 8):
         return await self._cached(
@@ -122,6 +139,31 @@ class CachedFlibustaClient:
             lambda: self.client.details(book_id),
             _details_from_dict,
         )
+
+    async def catalog_hints(self):
+        if not self.enabled:
+            return [], []
+        books, authors = {}, {}
+        try:
+            for kind, payload in await self.repo.recent_catalog_metadata():
+                rows = payload[1] if kind == "author_books" else payload
+                if not isinstance(rows, list):
+                    continue
+                for row in rows[:40]:
+                    try:
+                        if kind == "author_search":
+                            item = AuthorResult(**row)
+                            if len(authors) < 100:
+                                authors[item.author_id] = item
+                        else:
+                            item = SearchResult(**row)
+                            if len(books) < 200:
+                                books[item.book_id] = item
+                    except (TypeError, KeyError):
+                        continue
+        except Exception:
+            logger.warning("catalog hint read failed", exc_info=True)
+        return list(books.values()), list(authors.values())
 
     async def download(self, *args, **kwargs):
         return await self.client.download(*args, **kwargs)
@@ -206,7 +248,20 @@ class CachedFlibustaClient:
                     done.exception()
 
             task.add_done_callback(cleanup)
-        return await asyncio.shield(task)
+        self._waiters[task] = self._waiters.get(task, 0) + 1
+        try:
+            return await asyncio.shield(task)
+        finally:
+            remaining = self._waiters.get(task, 1) - 1
+            if remaining:
+                self._waiters[task] = remaining
+            else:
+                self._waiters.pop(task, None)
+                if not task.done():
+                    if self._inflight.get(cache_key) is task:
+                        self._inflight.pop(cache_key, None)
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
 
     async def _stale(self, cache_key, cache_type, decode):
         if not self.enabled or self.stale_if_error_seconds <= 0:

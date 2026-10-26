@@ -20,14 +20,14 @@ from app.web.app import WebDependencies, build_web_app
 
 
 @asynccontextmanager
-async def browser(tmp_path, service):
+async def browser(tmp_path, service, catalog=None):
     db = Database(str(tmp_path / "search.sqlite"))
     await db.initialize()
     access = AccessRepository(db)
     await access.ensure_user(42, "approved")
     auth = WebAccessRepository(db, "test-secret")
     deps = WebDependencies(
-        search_service=service, flibusta=object(), web_access_repo=auth,
+        search_service=service, flibusta=catalog or object(), web_access_repo=auth,
         access_repo=access, favorites_repo=FavoritesRepository(db),
         history_repo=DownloadHistoryRepository(db), last_books_repo=LastBooksRepository(db),
         kindle_settings_repo=KindleSettingsRepository(db), reader_settings_repo=ReaderSettingsRepository(db),
@@ -170,4 +170,44 @@ def test_about_author_retry_keeps_explicit_intent(tmp_path):
             retry = html.find("a", string="Повторить поиск")
             assert response.status == 503
             assert "mode=about" in retry["href"]
+    asyncio.run(scenario())
+
+
+def test_web_query_clarification_escapes_and_preserves_choices():
+    from app.web.ui import search_page
+    markup = search_page('эко', [], [], query_choices=('книги Умберто Эко', '«<эко>»'), clarification='Что искать?')
+    soup = BeautifulSoup(markup, 'html.parser')
+    assert 'Что искать?' in soup.get_text()
+    assert 'Ничего не нашлось' not in soup.get_text()
+    assert soup.find('эко') is None
+    assert soup.find('a', string='книги Умберто Эко')['href'].startswith('/search?')
+
+
+def test_authenticated_browsing_paginates_and_validates_genres(tmp_path):
+    class Catalog:
+        async def popular_books(self):
+            return [SearchResult(str(i), f'Book {i}', 'Author') for i in range(42)]
+        async def genres(self):
+            return [{'code': 'detective', 'name': 'Детективы'}]
+        async def genre_books(self, code):
+            assert code == 'detective'
+            return [SearchResult('50', 'Детектив', 'Автор')]
+    async def scenario():
+        async with browser(tmp_path, object(), Catalog()) as client:
+            response = await client.get('/browse')
+            soup = BeautifulSoup(await response.text(), 'html.parser')
+            assert response.status == 200
+            assert '7 дней' in soup.get_text()
+            assert soup.find('a', href='/book/19') and not soup.find('a', href='/book/20')
+            next_page = soup.find('a', string='Дальше →')
+            second = await (await client.get(next_page['href'])).text()
+            assert '/book/20' in second
+            genres = await (await client.get('/browse?view=genres')).text()
+            assert '<select name="genre">' in genres and 'Детективы' in genres
+            result = await client.get('/browse?genre=detective')
+            assert '/book/50' in await result.text()
+            assert (await client.get('/browse?genre=missing')).status == 400
+            client.session.cookie_jar.clear()
+            unauthenticated = await client.get('/browse', allow_redirects=False)
+            assert unauthenticated.status == 303
     asyncio.run(scenario())

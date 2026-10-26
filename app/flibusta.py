@@ -104,6 +104,34 @@ class FlibustaClient:
         if self._own_client:
             await self._client.aclose()
 
+    async def popular_books(self) -> list[SearchResult]:
+        """Source ranking for the last seven days, in source order."""
+        response = await self._get(f"{self.base_url}/stat/w")
+        main = BeautifulSoup(response.text, "lxml").select_one("#main")
+        return parse_search_results(str(main), limit=100) if main else []
+
+    async def genres(self) -> list[dict[str, str]]:
+        response = await self._get(f"{self.base_url}/g")
+        main = BeautifulSoup(response.text, "lxml").select_one("#main")
+        result = {}
+        for link in main.select('a[href^="/g/"]') if main else []:
+            code = link.get("href", "").removeprefix("/g/")
+            name = link.get_text(" ", strip=True)
+            if re.fullmatch(r"[a-z0-9_]{1,48}", code) and name:
+                result[code] = {"code": code, "name": name[:120]}
+            if len(result) >= 400:
+                break
+        return list(result.values())
+
+    async def genre_books(self, code: str) -> list[SearchResult]:
+        """Community recommendations filtered by the source genre code."""
+        if not re.fullmatch(r"[a-z0-9_]{1,48}", code):
+            raise ValueError("Invalid genre")
+        response = await self._get(f"{self.base_url}/rec?view=books&srcgenre={code}")
+        form = BeautifulSoup(response.text, "lxml").select_one('#main form[name="formrecs"]')
+        tables = form.select("table") if form else []
+        return parse_search_results(str(tables[-1]), limit=100) if tables else []
+
     async def search(self, query: str, limit: int = 8) -> list[SearchResult]:
         query = query.strip()
         if not query:

@@ -90,6 +90,8 @@ def home_page(*, notice: str | None = None, recent_books: list[SearchResult] | N
         '<input name="q" type="search" placeholder="Название книги или автор" required autofocus>'
         '<p><button class="primary" type="submit">Искать</button></p></form>'
         '<p class="muted">Например: «Дюна», «Пелевин» или «исповедь толстой».</p>'
+        '<p><a class="button" href="/browse">Популярное за неделю</a></p>'
+        '<p><a class="button" href="/browse?view=genres">Книги по жанрам</a></p>'
         f"{recent_html}",
         authenticated=True,
     )
@@ -110,6 +112,8 @@ def search_page(
     author_query: str | None = None,
     suggested_query: str | None = None,
     about_author: bool = False,
+    query_choices: tuple[str, ...] = (),
+    clarification: str | None = None,
 ) -> str:
     def search_link(label, **options):
         params = {"q": query, "expand": "1" if expanded else "0", **({"mode": "about"} if about_author else {}), **options}
@@ -120,6 +124,8 @@ def search_page(
     content = f'<div class="notice">{escape(notice)}</div>' if notice else ""
     if error:
         content += f'<div class="notice">{escape(error)}</div>'
+    elif clarification:
+        content += f"<p>{escape(clarification)}</p>"
     elif not books and not authors:
         content += ("<p>Автор не найден. Проверь имя или выбери другой способ поиска.</p>" if author_query
                     else "<p>Ничего не нашлось. Попробуй сократить запрос.</p>")
@@ -135,6 +141,8 @@ def search_page(
         if authors:
             heading = "Уточни автора" if author_query and len(authors) > 1 else "Авторы"
             content += f"<h2>{heading}</h2>" + author_list(authors[page_number * 12:(page_number + 1) * 12])
+    for choice in query_choices[:4]:
+        content += search_link(choice, q=choice, expand="0")
     if suggested_query:
         content += '<p>Вы имели в виду:</p>' + search_link(suggested_query, q=suggested_query, expand="0")
     if author_query:
@@ -340,3 +348,21 @@ def _post_button(action: str, label: str) -> str:
         f'<form class="inline" method="post" action="{escape(action, quote=True)}">'
         f'<button type="submit">{escape(label)}</button></form>'
     )
+
+
+def browse_page(title, books, genres, *, page_number=0, genre=None, notice=""):
+    content = f'<p class="notice">{escape(notice)}</p>'
+    if genres:
+        content += '<form action="/browse" method="get"><label>Жанр <select name="genre">'
+        content += ''.join(f'<option value="{escape(g["code"], quote=True)}">{escape(g["name"])}</option>' for g in genres)
+        content += '</select></label><p><button type="submit">Показать книги</button></p></form>'
+        content += '<p>Рекомендации пользователей Flibusta в выбранном жанре; это не полный каталог жанра.</p>'
+    else:
+        pages = max(1, (len(books) + 19) // 20)
+        page_number = min(page_number, pages - 1)
+        content += book_list(books[page_number * 20:(page_number + 1) * 20]) if books else '<p>Источник не вернул подборку. Попробуй позже.</p>'
+        for number, label in ((page_number - 1, '← Назад'), (page_number + 1, 'Дальше →')):
+            if 0 <= number < pages:
+                params = urlencode({'page': number, **({'genre': genre} if genre else {})})
+                content += f'<p><a class="button" href="/browse?{escape(params, quote=True)}">{label}</a></p>'
+    return page(title, f'<h2>{escape(title)}</h2>{content}', authenticated=True)

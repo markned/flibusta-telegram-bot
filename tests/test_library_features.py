@@ -431,7 +431,7 @@ def test_home_uses_one_persistent_menu_without_inline_duplicates(monkeypatch):
     assert len(message.answers) == 1
     markup = message.answers[0][1]["reply_markup"]
     labels = [button.text for row in markup.keyboard for button in row]
-    assert labels == ["⭐ Избранное", "🕘 История", "📚 Последняя", "📱 Мои устройства", "❓ Помощь"]
+    assert labels == ["⭐ Избранное", "🕘 История", "📚 Последняя", "📱 Мои устройства", "🔥 Популярное", "📖 Жанры", "❓ Помощь"]
     assert not hasattr(markup, "inline_keyboard")
 
 
@@ -730,3 +730,110 @@ def test_author_confirmation_checks_owner_and_preserves_human_identity(monkeypat
         assert calls == [(777, "Лев Толстой")]
     finally:
         main.search_sessions.pop(session.session_id, None)
+
+
+def test_cancelled_catalog_probes_release_unshared_loader_but_keep_other_waiters(tmp_path):
+    class Catalog:
+        def __init__(self):
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+            self.stopped = asyncio.Event()
+            self.calls = 0
+
+        async def search(self, query, limit=8):
+            self.calls += 1
+            self.started.set()
+            try:
+                await self.release.wait()
+                return [SearchResult("10", "Book", "Author")]
+            finally:
+                self.stopped.set()
+
+        async def close(self):
+            pass
+
+    async def scenario():
+        db = Database(str(tmp_path / "probe.sqlite"))
+        await db.initialize()
+        raw = Catalog()
+        cached = CachedFlibustaClient(raw, CacheRepository(db), enabled=False, ttls={"book_search": 60})
+        try:
+            first = asyncio.create_task(cached.search("Book"))
+            second = asyncio.create_task(cached.search("Book"))
+            await raw.started.wait()
+            first.cancel()
+            await asyncio.gather(first, return_exceptions=True)
+            assert not raw.stopped.is_set()
+            raw.release.set()
+            assert (await second)[0].book_id == "10" and raw.calls == 1
+            raw.release.clear()
+            raw.started.clear()
+            raw.stopped.clear()
+            only = asyncio.create_task(cached.search("Another"))
+            await raw.started.wait()
+            only.cancel()
+            await asyncio.gather(only, return_exceptions=True)
+            await asyncio.wait_for(raw.stopped.wait(), timeout=0.1)
+            await asyncio.sleep(0)
+            assert not cached._inflight
+        finally:
+            await cached.close()
+    run(scenario())
+
+
+def test_catalog_hints_read_only_bounded_fresh_public_metadata(tmp_path):
+    async def scenario():
+        db = Database(str(tmp_path / "hints.sqlite"))
+        await db.initialize()
+        repo = CacheRepository(db)
+        await repo.set("books", "book_search", [SearchResult("100", "Имя розы", "Умберто Эко")], 60)
+        await repo.set("authors", "author_search", [AuthorResult("10", "Умберто Эко")], 60)
+        await repo.set("expired", "book_search", [SearchResult("101", "Expired", "Author")], -1)
+        await repo.set("private", "unrelated", {"secret": "must not be decoded as catalog data"}, 60)
+        await repo.set("huge", "book_search", [{"book_id": "bad", "title": "x" * 40000, "author": "A"}], 60)
+        cached = CachedFlibustaClient(CountingFlibusta(), repo, enabled=True, ttls={})
+        books, authors = await cached.catalog_hints()
+        assert [b.book_id for b in books] == ["100"]
+        assert [a.author_id for a in authors] == ["10"]
+        assert cached.client.calls == 0
+    run(scenario())
+
+
+def test_telegram_generic_clarification_uses_owned_confirmation_sessions(monkeypatch):
+    import app.main as main
+    class Service:
+        async def search(self, query):
+            return SearchOutcome(SearchPlan(query, query, SearchMode.EXACT, (query,), ()), [], [], (),
+                                 query_choices=('книги Умберто Эко', '«умберто эко»'), clarification='Это автор или название книги?')
+    monkeypatch.setattr(main, 'search_service', Service())
+    main.search_timestamps.clear()
+    message = _FakeMessage()
+    run(main.send_smart_results(message, 'умберто эко'))
+    text, payload = message.edit_payloads[-1]
+    assert 'Это автор или название' in text
+    for row in payload['reply_markup'].inline_keyboard:
+        button = row[0]
+        session = main.search_sessions[button.callback_data.split(':')[1]]
+        assert session.query == button.text
+        assert session.user_id == message.from_user.id and session.chat_id == message.chat.id
+
+
+def test_telegram_genre_pages_and_weekly_book_session(monkeypatch):
+    import app.main as main
+    class Catalog:
+        async def genres(self):
+            return [{'code': f'g{i}', 'name': f'Жанр {i}'} for i in range(35)]
+        async def popular_books(self):
+            return [SearchResult('640151', '1984', 'Джордж Оруэлл')]
+    monkeypatch.setattr(main, 'flibusta', Catalog())
+    main.search_timestamps.clear()
+    message = _FakeMessage()
+    run(main.send_catalog_browse(message, genres_only=True, page_number=1))
+    buttons = [b for row in message.answers[-1][1]['reply_markup'].inline_keyboard for b in row]
+    assert buttons[0].callback_data == 'browse:g16'
+    assert buttons[-1].callback_data == 'browse:genres-2'
+    assert len(buttons) == 18
+    run(main.send_catalog_browse(message))
+    text, payload = message.answers[-1]
+    assert '7 дней' in text
+    assert any(b.callback_data == 'book:640151' for row in payload['reply_markup'].inline_keyboard for b in row)

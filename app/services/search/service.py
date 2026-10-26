@@ -8,6 +8,8 @@ from typing import Protocol
 
 from app.services.search.context import SearchStatus, search_status
 from app.services.author_names import canonical_author_query, names_match, suggest_author_query
+from app.services.catalog_query import (author_queries, author_plan, combined_plan, book_evidence,
+                                        correction, probe_worthwhile, split_name, title_relevant)
 
 from app.flibusta import AuthorResult, FlibustaError, SearchResult
 from app.services.search.planner import build_search_plan
@@ -37,6 +39,8 @@ class _SearchRun:
     authors: list[AuthorResult] = field(default_factory=list)
     used: list[str] = field(default_factory=list)
     responses: dict = field(default_factory=dict)
+    plan: SearchPlan | None = None
+    request_counts: dict = field(default_factory=dict)
 
 
 _search_run: ContextVar[_SearchRun | None] = ContextVar("search_run", default=None)
@@ -66,6 +70,8 @@ class SearchService:
             return await self._within_deadline(self._search_author_title_with_fallback(plan), plan, expanded=expanded)
         if plan.mode == SearchMode.AUTHOR:
             return await self._within_deadline(self._search_author_intent(plan), plan, expanded=expanded)
+        if plan.catalog_lookup:
+            return await self._within_deadline(self._search_catalog(plan), plan, expanded=expanded)
         if plan.mode == SearchMode.EXACT:
             return await self._within_deadline(self._search_exact(plan), plan, expanded=expanded)
         return await self._within_deadline(self._search_general(plan), plan, expanded=expanded)
@@ -103,6 +109,112 @@ class SearchService:
             title=title,
         )
         return await self._within_deadline(self._search_author_title(plan), plan)
+
+    async def _collect_authors(self, query):
+        candidates = {}
+        for variant in author_queries(query):
+            rows = await self._request("search_authors", variant, limit=self.author_limit)
+            for item in rows:
+                candidates[item.author_id] = item
+            if any(author_name_matches(query, item.name) for item in candidates.values()):
+                break
+        return list(candidates.values())[:self.author_limit * 3]
+
+    async def _probe_authors(self, plan):
+        # An optional classifier must not contaminate required-source provenance.
+        status = SearchStatus()
+        token = search_status.set(status)
+        try:
+            async with asyncio.timeout(min(0.75, max(0.01, self.timeout_seconds / 3))):
+                return await self._collect_authors(plan.cleaned_query), status
+        except (Exception, TimeoutError):
+            return [], status
+        finally:
+            search_status.reset(token)
+
+    def _adopt(self, plan):
+        state = _search_run.get()
+        state.plan = plan
+        state.books.clear()
+        state.authors.clear()
+
+    async def _resolved_author(self, plan, authors, status):
+        resolved = author_plan(plan, plan.cleaned_query)
+        self._adopt(resolved)
+        self._remember(resolved, [], authors)
+        provenance = search_status.get()
+        provenance.source_unavailable |= status.source_unavailable
+        if status.stale_at:
+            provenance.stale_at = status.stale_at
+        outcome = SearchOutcome(resolved, [], authors, tuple(_search_run.get().used))
+        return await self._author_works(resolved, outcome)
+
+    async def _search_catalog(self, plan):
+        book_task = asyncio.create_task(self._search_books_only(plan))
+        probe_task = (asyncio.create_task(self._probe_authors(plan))
+                      if probe_worthwhile(plan.cleaned_query) and hasattr(self.client, "search_authors") else None)
+        tasks = [book_task] + ([probe_task] if probe_task else [])
+        try:
+            book_error = None
+            try:
+                outcome = await book_task
+            except Exception as exc:
+                book_error = exc
+                outcome = SearchOutcome(plan, [], [], ())
+            evidence = book_evidence(plan, outcome.books)
+            literal = any(norm(base_title(book.title)) == norm(plan.cleaned_query) for book in outcome.books)
+            if evidence and not literal:
+                if len(evidence) == 1:
+                    (author, title), books = next(iter(evidence.items()))
+                    resolved = combined_plan(plan, author, title)
+                    self._adopt(resolved)
+                    self._remember(resolved, books)
+                    return SearchOutcome(resolved, books, [], outcome.used_queries)
+                return SearchOutcome(plan, [], [], outcome.used_queries,
+                                     query_choices=tuple(f"{author} — {title}" for author, title in evidence)[:4],
+                                     clarification="Уточни автора книги.")
+            candidates, status = await probe_task if probe_task else ([], SearchStatus())
+            authors = [item for item in candidates if author_name_matches(plan.cleaned_query, item.name)]
+            if authors:
+                if literal:
+                    self._adopt(plan)
+                    return SearchOutcome(plan, [], [], outcome.used_queries,
+                                         query_choices=tuple([f"книги {item.name}" for item in authors[:3]] + [f"«{plan.cleaned_query}»"]),
+                                         clarification="Это автор или название книги?")
+                return await self._resolved_author(plan, authors, status)
+            if outcome.books:
+                return outcome
+            full_suggestion = correction(plan.cleaned_query, [], candidates)
+            if full_suggestion:
+                return replace(outcome, suggested_query=full_suggestion)
+            combinations = {}
+            for item in candidates:
+                split = split_name(plan.cleaned_query, item.name)
+                if split and split[0]:
+                    combinations[(item.name, split[0])] = item
+            if len(combinations) == 1:
+                (author, title), _ = next(iter(combinations.items()))
+                resolved = combined_plan(plan, author, title)
+                self._adopt(resolved)
+                return await self._search_author_title_with_fallback(resolved)
+            if len(combinations) > 1:
+                return SearchOutcome(plan, [], [], outcome.used_queries,
+                                     query_choices=tuple(f"{author} — {title}" for author, title in combinations)[:4],
+                                     clarification="Уточни автора книги.")
+            hints_books, hints_authors = [], []
+            if hasattr(self.client, "catalog_hints"):
+                hints_books, hints_authors = await self.client.catalog_hints()
+            suggestion = correction(plan.cleaned_query, hints_books, [*candidates, *hints_authors])
+            if suggestion:
+                return replace(outcome, suggested_query=suggestion)
+            if book_error:
+                raise book_error
+            return outcome
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _search_general(self, plan: SearchPlan) -> SearchOutcome:
         # Book search is the common path. Do not make a fast title lookup wait
@@ -167,7 +279,7 @@ class SearchService:
 
     async def _search_author_only(self, plan: SearchPlan) -> SearchOutcome:
         query = canonical_author_query(plan.author or plan.cleaned_query)
-        candidates = await self._request("search_authors", query, limit=self.author_limit)
+        candidates = await self._collect_authors(query)
         authors = rank_authors([item for item in candidates if author_name_matches(query, item.name)], query)
         self._remember(plan, [], authors)
         suggestion = None if authors else suggest_author_query(query, [item.name for item in candidates])
@@ -180,6 +292,9 @@ class SearchService:
             outcome = await self._search_author_only(plan)
         except Exception:
             return SearchOutcome(plan, [], [], (), suggested_query=suggest_author_query(plan.author or plan.cleaned_query))
+        return await self._author_works(plan, outcome)
+
+    async def _author_works(self, plan, outcome):
         if len(outcome.authors) != 1:
             return outcome
         author = outcome.authors[0]
@@ -302,6 +417,10 @@ class SearchService:
                 if isinstance(value, Exception):
                     raise value
                 return value
+            maximum = {"search": 2 + self.max_fallback_queries, "search_authors": 4, "author_books": 2}.get(method)
+            if maximum is not None and state.request_counts.get(method, 0) >= maximum:
+                return ("", []) if method == "author_books" else []
+            state.request_counts[method] = state.request_counts.get(method, 0) + 1
             state.used.append(query)
         try:
             value = await getattr(self.client, method)(query, **kwargs)
@@ -323,7 +442,7 @@ class SearchService:
             state.authors = list({item.author_id: item for item in [*state.authors, *authors]}.values())[:self.author_limit]
 
     async def _within_deadline(self, operation, plan, *, expanded=False):
-        state = _SearchRun(expanded=expanded)
+        state = _SearchRun(expanded=expanded, plan=plan)
         status = SearchStatus()
         run_token = _search_run.set(state)
         status_token = search_status.set(status)
@@ -335,7 +454,8 @@ class SearchService:
                 if not state.books and not state.authors:
                     raise
                 status.source_unavailable = True
-                outcome = SearchOutcome(plan, state.books, state.authors, tuple(state.used), partial=True, has_more=True)
+                outcome = SearchOutcome(state.plan, state.books, state.authors, tuple(state.used), partial=True, has_more=True)
+            plan = outcome.plan
             books = rank_and_dedupe_books(outcome.books, plan.title or plan.cleaned_query)[:self.book_limit]
             approximate = bool(books and plan.mode != SearchMode.AUTHOR and not outcome.about_author
                                and not title_matches(plan.title or plan.cleaned_query, books[0].title))
@@ -381,8 +501,12 @@ def _candidate_matches(plan: SearchPlan, book: SearchResult) -> bool:
             return True
         if not book.author or not author_name_matches(plan.author or "", book.author):
             return False
-        return title_matches(expected, book.title) or SequenceMatcher(None, norm(expected), norm(base_title(book.title))).ratio() >= 0.85
-    if is_strong_book_match(book, expected):
+        return title_relevant(expected, book.title) or title_matches(expected, book.title) or SequenceMatcher(None, norm(expected), norm(base_title(book.title))).ratio() >= 0.85
+    if plan.catalog_lookup and book.author:
+        split = split_name(expected, book.author)
+        if split and split[0] and title_relevant(split[0], book.title):
+            return True
+    if title_relevant(expected, book.title) or is_strong_book_match(book, expected):
         return True
     tokens = set(norm(expected).split())
     title_tokens = set(norm(base_title(book.title)).split())
