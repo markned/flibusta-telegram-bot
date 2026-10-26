@@ -108,3 +108,66 @@ def test_web_labels_stale_cache_and_separates_approximate_results(tmp_path):
             assert "Повторить поиск" in text
             assert "<script" not in text and "display: flex" not in text
     asyncio.run(scenario())
+
+
+def test_web_author_search_shows_works_not_biographies_and_offers_explicit_about(tmp_path):
+    from app.services.search import SearchService
+
+    class Catalog:
+        async def search_authors(self, query, limit):
+            return [AuthorResult("1", "Лев Толстой"), AuthorResult("2", "Алексей Толстой")]
+
+        async def author_books(self, author_id, limit):
+            return "Лев Толстой", [SearchResult("200", "Война и мир", "Лев Толстой")]
+
+        async def search(self, query, limit):
+            return [SearchResult("100", "Лев Толстой. Биография", "Павел Басинский"),
+                    SearchResult("200", "Война и мир", "Лев Толстой")]
+
+    async def scenario():
+        service = SearchService(Catalog(), book_limit=40, author_limit=20)
+        async with browser(tmp_path, service) as client:
+            html = BeautifulSoup(await (await client.get("/search", params={"q": "лев толстой"})).text(), "html.parser")
+            assert "Книги автора" in html.get_text()
+            assert html.find("a", href="/book/200") is not None
+            assert html.find("a", href="/book/100") is None
+            assert "Приблизительные совпадения" not in html.get_text()
+            about = html.find("a", string="Книги об авторе")
+            assert about is not None
+            about_html = BeautifulSoup(await (await client.get(about["href"])).text(), "html.parser")
+            assert about_html.find("a", href="/book/100") is not None
+            assert about_html.find("a", href="/book/200") is None
+            ambiguous = BeautifulSoup(await (await client.get("/search", params={"q": "Толстой"})).text(), "html.parser")
+            assert "Уточни автора" in ambiguous.get_text()
+            assert ambiguous.find("a", href="/author/1") and ambiguous.find("a", href="/author/2")
+    asyncio.run(scenario())
+
+
+def test_web_author_typo_is_a_confirmation_link_not_silent_replacement(tmp_path):
+    from app.services.search import SearchService
+
+    class Catalog:
+        async def search_authors(self, query, limit):
+            return []
+    async def scenario():
+        async with browser(tmp_path, SearchService(Catalog(), book_limit=40, author_limit=20)) as client:
+            html = BeautifulSoup(await (await client.get("/search", params={"q": "лев толтсой"})).text(), "html.parser")
+            assert "Вы имели в виду" in html.get_text()
+            assert html.find("input", attrs={"name": "q"})["value"] == "лев толтсой"
+            assert html.find("a", string="Лев Толстой") is not None
+    asyncio.run(scenario())
+
+
+def test_about_author_retry_keeps_explicit_intent(tmp_path):
+    class Service:
+        async def search_about_author(self, query):
+            raise FlibustaError("offline")
+
+    async def scenario():
+        async with browser(tmp_path, Service()) as client:
+            response = await client.get("/search", params={"q": "Лев Толстой", "mode": "about"})
+            html = BeautifulSoup(await response.text(), "html.parser")
+            retry = html.find("a", string="Повторить поиск")
+            assert response.status == 503
+            assert "mode=about" in retry["href"]
+    asyncio.run(scenario())

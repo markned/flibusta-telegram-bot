@@ -100,3 +100,13 @@ These are development-only; production code and requirements are unchanged.
 - Seeded 30-book/90-query benchmark and measurements: `docs/search-improvements.md`.
   Offline synthetic coverage passes; live catalog verification is blocked by source
   connectivity, not treated as catalog absence. No real download in validation.
+
+## Author search intent
+
+- Author queries no longer fall back to books mentioning the author's name.
+- Full given-name/surname identity is required; surname-only ambiguity asks for
+  a choice. Unique matches expose bounded works from a validated author page.
+- Known genitive name forms and explicit `книги <автор>` requests are normalized;
+  one-edit corrections require confirmation. Explicit about-author action stays
+  separate. Web and Telegram labels/links preserve this distinction.
+- Details and limitations: `docs/search-author-intent.md`.

@@ -107,9 +107,12 @@ def search_page(
     retry: bool = False,
     expanded: bool = False,
     page_number: int = 0,
+    author_query: str | None = None,
+    suggested_query: str | None = None,
+    about_author: bool = False,
 ) -> str:
     def search_link(label, **options):
-        params = {"q": query, "expand": "1" if expanded else "0", **options}
+        params = {"q": query, "expand": "1" if expanded else "0", **({"mode": "about"} if about_author else {}), **options}
         return f'<p><a class="button" href="/search?{escape(urlencode(params), quote=True)}">{escape(label)}</a></p>'
 
     pages = max(1, (len(books) + 19) // 20, (len(authors) + 11) // 12)
@@ -118,17 +121,24 @@ def search_page(
     if error:
         content += f'<div class="notice">{escape(error)}</div>'
     elif not books and not authors:
-        content += "<p>Ничего не нашлось. Попробуй сократить запрос.</p>"
+        content += ("<p>Автор не найден. Проверь имя или выбери другой способ поиска.</p>" if author_query
+                    else "<p>Ничего не нашлось. Попробуй сократить запрос.</p>")
     else:
         shown = books[page_number * 20:(page_number + 1) * 20]
-        matches = [book for book in shown if title_matches(match_query or query, book.title)]
+        matches = shown if author_query or about_author else [book for book in shown if title_matches(match_query or query, book.title)]
         approximate = [book for book in shown if book not in matches]
         if matches:
-            content += "<h2>Книги</h2>" + book_list(matches)
+            heading = f"Книги автора: {authors[0].name}" if author_query and len(authors) == 1 else "Книги об авторе" if about_author else "Книги"
+            content += f"<h2>{escape(heading)}</h2>" + book_list(matches)
         if approximate:
             content += "<h2>Приблизительные совпадения</h2>" + book_list(approximate)
         if authors:
-            content += "<h2>Авторы</h2>" + author_list(authors[page_number * 12:(page_number + 1) * 12])
+            heading = "Уточни автора" if author_query and len(authors) > 1 else "Авторы"
+            content += f"<h2>{heading}</h2>" + author_list(authors[page_number * 12:(page_number + 1) * 12])
+    if suggested_query:
+        content += '<p>Вы имели в виду:</p>' + search_link(suggested_query, q=suggested_query, expand="0")
+    if author_query:
+        content += search_link("Книги об авторе", q=author_query, mode="about", expand="0")
     if pages > 1:
         content += f'<p class="muted">Страница {page_number + 1} из {pages}</p>'
     if page_number > 0:

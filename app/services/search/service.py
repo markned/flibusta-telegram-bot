@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 from typing import Protocol
 
 from app.services.search.context import SearchStatus, search_status
+from app.services.author_names import canonical_author_query, names_match, suggest_author_query
 
 from app.flibusta import AuthorResult, FlibustaError, SearchResult
 from app.services.search.planner import build_search_plan
@@ -64,7 +65,7 @@ class SearchService:
         if plan.mode == SearchMode.AUTHOR_TITLE:
             return await self._within_deadline(self._search_author_title_with_fallback(plan), plan, expanded=expanded)
         if plan.mode == SearchMode.AUTHOR:
-            return await self._within_deadline(self._search_author_with_fallback(plan), plan, expanded=expanded)
+            return await self._within_deadline(self._search_author_intent(plan), plan, expanded=expanded)
         if plan.mode == SearchMode.EXACT:
             return await self._within_deadline(self._search_exact(plan), plan, expanded=expanded)
         return await self._within_deadline(self._search_general(plan), plan, expanded=expanded)
@@ -165,23 +166,47 @@ class SearchService:
         return SearchOutcome(plan, best, [], tuple(used))
 
     async def _search_author_only(self, plan: SearchPlan) -> SearchOutcome:
-        query = plan.author or plan.cleaned_query
-        authors = rank_authors(
-            await self._request("search_authors", query, limit=self.author_limit),
-            query,
-        )
-        authors = [item for item in authors if author_name_matches(query, item.name)]
+        query = canonical_author_query(plan.author or plan.cleaned_query)
+        candidates = await self._request("search_authors", query, limit=self.author_limit)
+        authors = rank_authors([item for item in candidates if author_name_matches(query, item.name)], query)
         self._remember(plan, [], authors)
-        return SearchOutcome(plan, [], authors, (query,))
+        suggestion = None if authors else suggest_author_query(query, [item.name for item in candidates])
+        return SearchOutcome(plan, [], authors, (query,), suggested_query=suggestion)
 
-    async def _search_author_with_fallback(self, plan: SearchPlan) -> SearchOutcome:
+    async def _search_author_intent(self, plan: SearchPlan) -> SearchOutcome:
+        # Author intent is sticky: an empty/error author response must never
+        # become a literal book search returning biographies of that author.
         try:
             outcome = await self._search_author_only(plan)
         except Exception:
-            outcome = SearchOutcome(plan, [], [], ())
-        if outcome.authors:
+            return SearchOutcome(plan, [], [], (), suggested_query=suggest_author_query(plan.author or plan.cleaned_query))
+        if len(outcome.authors) != 1:
             return outcome
-        return await self._search_books_only(_general_fallback_plan(plan))
+        author = outcome.authors[0]
+        try:
+            page_name, books = await self._request("author_books", author.author_id, limit=self.book_limit)
+        except Exception:
+            return outcome
+        if page_name and not author_name_matches(author.name, page_name):
+            status = search_status.get()
+            if status is not None:
+                status.source_unavailable = True
+            return outcome
+        works = [SearchResult(book.book_id, book.title, book.author or page_name or author.name)
+                 for book in books
+                 if not book.author or author_name_matches(author.name, book.author)]
+        self._remember(plan, works, outcome.authors)
+        return replace(outcome, books=works)
+
+    async def search_about_author(self, query: str) -> SearchOutcome:
+        author = canonical_author_query(query)
+        plan = SearchPlan(query, author, SearchMode.EXACT, (author,), ())
+        async def lookup():
+            books = await self._request("search", author, limit=self.book_limit)
+            about = [book for book in books if author_name_matches(author, book.title)]
+            self._remember(plan, about)
+            return SearchOutcome(plan, about, [], (author,), about_author=True)
+        return await self._within_deadline(lookup(), plan)
 
     async def _search_author_title_with_fallback(self, plan: SearchPlan) -> SearchOutcome:
         try:
@@ -312,7 +337,8 @@ class SearchService:
                 status.source_unavailable = True
                 outcome = SearchOutcome(plan, state.books, state.authors, tuple(state.used), partial=True, has_more=True)
             books = rank_and_dedupe_books(outcome.books, plan.title or plan.cleaned_query)[:self.book_limit]
-            approximate = bool(books and not title_matches(plan.title or plan.cleaned_query, books[0].title))
+            approximate = bool(books and plan.mode != SearchMode.AUTHOR and not outcome.about_author
+                               and not title_matches(plan.title or plan.cleaned_query, books[0].title))
             return replace(
                 outcome, plan=plan, books=books, approximate=approximate,
                 source_unavailable=status.source_unavailable, stale_at=status.stale_at,
@@ -324,14 +350,7 @@ class SearchService:
 
 
 def author_name_matches(expected: str, actual: str) -> bool:
-    expected_norm = norm(expected)
-    actual_norm = norm(actual)
-    if not expected_norm or not actual_norm:
-        return False
-    if expected_norm in actual_norm or actual_norm in expected_norm:
-        return True
-    surname = expected_norm.split()[-1]
-    return surname in actual_norm.split()
+    return names_match(expected, actual)
 
 
 def title_matches(expected: str, actual: str) -> bool:
@@ -348,17 +367,6 @@ def _as_flibusta_error(exc: Exception) -> FlibustaError:
     if isinstance(exc, TimeoutError):
         return FlibustaError("Flibusta не ответила вовремя. Попробуй ещё раз через минуту.")
     return FlibustaError("Не удалось подключиться к Flibusta.")
-
-
-def _general_fallback_plan(plan: SearchPlan) -> SearchPlan:
-    return SearchPlan(
-        original_query=plan.original_query,
-        cleaned_query=plan.cleaned_query,
-        mode=SearchMode.FALLBACK,
-        primary_queries=plan.primary_queries or (plan.cleaned_query,),
-        fallback_queries=plan.fallback_queries,
-        format_hint=plan.format_hint,
-    )
 
 
 def _candidate_matches(plan: SearchPlan, book: SearchResult) -> bool:

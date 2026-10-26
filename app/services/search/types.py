@@ -39,6 +39,8 @@ class SearchOutcome:
     source_unavailable: bool = False
     stale_at: str | None = None
     has_more: bool = False
+    suggested_query: str | None = None
+    about_author: bool = False
 
 
 def outcome_notice(outcome: SearchOutcome) -> str:
