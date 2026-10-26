@@ -24,9 +24,3 @@ async def browse_catalog(client, genre=None, *, genres_only=False):
         )
     finally:
         search_status.reset(token)
-
-
-def freshness_notice(status):
-    if status.stale_at:
-        return f"Источник недоступен. Сохранённая подборка от {status.stale_at}."
-    return "Порядок книг — как на Flibusta. Топ обновляется в кэше раз в 15 минут, жанровая подборка — раз в час."

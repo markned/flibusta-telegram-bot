@@ -8,6 +8,8 @@ from app.services.search.service import title_matches
 from app.flibusta import AuthorResult, BookDetails, SearchResult
 from app.branding import BRAND_NAME
 from app.web.device import DeviceProfile
+from app.ui.catalog import genre_groups, group_key
+from app.services.popular_collections import SOURCES
 
 
 BASE_CSS = """
@@ -90,8 +92,9 @@ def home_page(*, notice: str | None = None, recent_books: list[SearchResult] | N
         '<input name="q" type="search" placeholder="Название книги или автор" required autofocus>'
         '<p><button class="primary" type="submit">Искать</button></p></form>'
         '<p class="muted">Например: «Дюна», «Пелевин» или «исповедь толстой».</p>'
-        '<p><a class="button" href="/browse">Популярное за неделю</a></p>'
+        '<p><a class="button" href="/browse">Популярное</a></p>'
         '<p><a class="button" href="/browse?view=genres">Книги по жанрам</a></p>'
+        '<p><a class="button" href="/browse?view=random">🎲 Случайная книга</a></p>'
         f"{recent_html}",
         authenticated=True,
     )
@@ -169,13 +172,13 @@ def search_page(
     )
 
 
-def book_list(books: list[SearchResult]) -> str:
+def book_list(books: list[SearchResult], *, context="") -> str:
     items = []
     for book in books:
         author = f'<div class="muted">{escape(book.author)}</div>' if book.author else ""
         items.append(
             '<article class="card">'
-            f'<a class="card-title" href="/book/{quote_plus(book.book_id)}">{escape(book.title)}</a>'
+            f'<a class="card-title" href="/book/{quote_plus(book.book_id)}{escape(context, quote=True)}">{escape(book.title)}</a>'
             f"{author}</article>"
         )
     return "".join(items)
@@ -199,6 +202,8 @@ def book_page(
     pocketbook_configured: bool,
     notice: str | None = None,
     cover_url: str | None = None,
+    return_url: str | None = None,
+    random_next: str | None = None,
 ) -> str:
     notice_html = f'<div class="notice">{escape(notice)}</div>' if notice else ""
     cover = ""
@@ -264,6 +269,11 @@ def book_page(
         fav_action = "remove" if favorite else "add"
         fav_label = "Удалить из избранного" if favorite else "Добавить в избранное"
         actions.append(_post_button(f"/favorite/{fav_action}/{details.book_id}", fav_label))
+    if return_url:
+        label = "← Каталог" if random_next else "← В подборку"
+        actions.append(f'<p><a class="button" href="{escape(return_url, quote=True)}">{label}</a></p>')
+    if random_next:
+        actions.append(f'<p><a class="button" href="{escape(random_next, quote=True)}">🎲 Ещё</a></p>')
     return page(
         details.title,
         f"{notice_html}<article><h2>{escape(details.title)}</h2>"
@@ -350,19 +360,43 @@ def _post_button(action: str, label: str) -> str:
     )
 
 
-def browse_page(title, books, genres, *, page_number=0, genre=None, notice=""):
-    content = f'<p class="notice">{escape(notice)}</p>'
+def browse_page(title, books, genres, *, page_number=0, genre=None, notice="", source=None, view="tops", group=None):
+    def link(label, **params):
+        return f'<p><a class="button" href="/browse?{escape(urlencode(params),quote=True)}">{escape(label)}</a></p>'
+    content = ""
+    params={}
     if genres:
-        content += '<form action="/browse" method="get"><label>Жанр <select name="genre">'
-        content += ''.join(f'<option value="{escape(g["code"], quote=True)}">{escape(g["name"])}</option>' for g in genres)
-        content += '</select></label><p><button type="submit">Показать книги</button></p></form>'
-        content += '<p>Рекомендации пользователей Flibusta в выбранном жанре; это не полный каталог жанра.</p>'
+        groups=genre_groups(genres)
+        if group in groups:
+            title=groups[group]['name']
+            values=[(g['name'],{'genre':g['code']}) for g in groups[group]['genres']]
+        elif group == 'all':
+            values=[(g['name'],{'view':'genres','group':key}) for key,g in sorted(groups.items(),key=lambda x:x[1]['name'].casefold())]
+        else:
+            preferred=['Фантастика и фэнтези','Детективы','Любовные романы','Нон-фикшн','Детское']
+            values=[(name,{'view':'genres','group':group_key(name)}) for name in preferred if group_key(name) in groups]
+            values.append(('Все разделы',{'view':'genres','group':'all'}))
+        pages=max(1,(len(values)+7)//8);page_number=min(page_number,pages-1)
+        content+=''.join(link(label,**options) for label,options in values[page_number*8:(page_number+1)*8])
+        params={'view':'genres',**({'group':group} if group else {})}
+        if group: content+=link('← Разделы',view='genres')
+    elif books or source or genre:
+        pages=max(1,(len(books)+7)//8);page_number=min(page_number,pages-1)
+        params={**({'source':source} if source else {}),**({'genre':genre} if genre else {})}
+        context='?'+urlencode({'collection':source or 'genre','collection_page':page_number,**({'genre':genre} if genre else {})})
+        content+=book_list(books[page_number*8:(page_number+1)*8],context=context) if books else '<p>Подборка пока недоступна. Попробуй позже.</p>'
+        content+=link('← Популярное') if source else link('← Жанры',view='genres')
+    elif view == 'random':
+        pages=1;content='<p>Пока нет книг для случайного выбора.</p>'
     else:
-        pages = max(1, (len(books) + 19) // 20)
-        page_number = min(page_number, pages - 1)
-        content += book_list(books[page_number * 20:(page_number + 1) * 20]) if books else '<p>Источник не вернул подборку. Попробуй позже.</p>'
-        for number, label in ((page_number - 1, '← Назад'), (page_number + 1, 'Дальше →')):
-            if 0 <= number < pages:
-                params = urlencode({'page': number, **({'genre': genre} if genre else {})})
-                content += f'<p><a class="button" href="/browse?{escape(params, quote=True)}">{label}</a></p>'
-    return page(title, f'<h2>{escape(title)}</h2>{content}', authenticated=True)
+        pages=1
+        content+=''.join(link(label,source=key) for key,label in SOURCES.items())
+    if pages>1:
+        content+='<p>'
+        for number,label in ((page_number-1,'← Назад'),(page_number+1,'Дальше →')):
+            if number == page_number + 1:
+                content += f'<span>{page_number + 1}/{pages}</span> '
+            if 0<=number<pages:
+                content+=f'<a class="button" href="/browse?{escape(urlencode({**params,"page":number}),quote=True)}">{label}</a> '
+        content+='</p>'
+    return page(title,f'<h2>{escape(title)}</h2>{content}',authenticated=True)

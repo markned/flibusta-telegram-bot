@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from dataclasses import replace
 import re
 from asyncio import sleep
 from datetime import datetime
@@ -102,6 +104,9 @@ from app.ui.home import (
 from app.web import WebDependencies, start_web_server
 
 settings = Settings()
+from app.services.popular_collections import PopularCollections, SOURCES
+from app.ui.catalog import catalog_menu, shelf_menu, tops_menu, genre_menu, genre_groups, group_key, group_name
+
 logging.basicConfig(
     level=getattr(logging, settings.log_level.upper(), logging.INFO),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -184,6 +189,8 @@ search_service = SearchService(
     timeout_seconds=settings.search_total_timeout_seconds,
     max_fallback_queries=settings.search_fallback_max_queries,
 )
+popular_collections = PopularCollections(flibusta, cache_repo)
+
 kindle_settings_repo = KindleSettingsRepository(db)
 reader_settings_repo = ReaderSettingsRepository(db)
 kindle_deliveries_repo = KindleDeliveriesRepository(db)
@@ -269,55 +276,88 @@ async def start(message: Message, command: CommandObject) -> None:
     await send_home(message)
 
 
-@router.message(Command("popular", "genres"))
+@router.message(Command("popular", "genres", "random"))
 async def browse_command(message: Message) -> None:
-    await send_catalog_browse(message, genres_only=message.text.split()[0].split("@")[0] == "/genres")
+    command = message.text.split()[0].split("@")[0]
+    await send_catalog_browse(message, action={"/popular":"tops", "/genres":"genres", "/random":"random"}[command])
 
 
 @router.callback_query(F.data.startswith("browse:"))
 async def browse_callback(callback: CallbackQuery) -> None:
     await callback_answer(callback)
     message = callback.message.model_copy(update={"from_user": callback.from_user})
-    value = callback.data.split(":", 1)[1]
-    if value.startswith("genres-"):
-        try:
-            page_number = min(24, max(0, int(value.removeprefix("genres-"))))
-        except ValueError:
+    action = callback.data.removeprefix("browse:")
+    if action.startswith("genres-"):
+        action = "genres"
+    if action.startswith("random"):
+        if not _allow_search(callback.from_user.id):
             return
-        await send_catalog_browse(message, genres_only=True, page_number=page_number)
-    else:
-        await send_catalog_browse(message, genre=None if value in {"week", "genres"} else value,
-                                  genres_only=value == "genres")
+        exclude = action.split(":",1)[1] if ":" in action else None
+        book = await popular_collections.random_book(exclude)
+        if book is None:
+            await callback.message.edit_text("Пока нет книг для случайного выбора.", reply_markup=catalog_menu())
+            return
+        session = _create_search_session(callback.from_user.id, message.chat.id, "Случайная книга", [book],
+                                         title="Случайная книга", return_to="browse:catalog")
+        await show_book(callback.model_copy(update={"data":f"cbook:{session.session_id}:{book.book_id}"}))
+        return
+    await send_catalog_browse(message, action=action, edit=True)
 
 
-async def send_catalog_browse(message: Message, genre=None, *, genres_only=False, page_number=0) -> None:
-    from app.services.catalog_browse import browse_catalog, freshness_notice
+async def send_catalog_browse(message: Message, genre=None, *, genres_only=False, page_number=0, action=None, edit=False) -> None:
+    from app.services.catalog_browse import browse_catalog
     if not _allow_search(message.from_user.id):
         await message.answer("Слишком много запросов. Подожди минуту.")
         return
+    action = action or ("group" if genre else "genres" if genres_only else "top:flibusta")
+    text, markup = "<b>Каталог</b>", catalog_menu()
     try:
-        title, books, genres, status = await browse_catalog(flibusta, genre, genres_only=genres_only)
-    except (FlibustaError, TimeoutError, ValueError):
-        await message.answer("Подборка сейчас недоступна. Попробуй позже.")
-        return
-    if genres:
-        page_size = 16
-        page_number = min(page_number, (len(genres) - 1) // page_size)
-        kb = InlineKeyboardBuilder()
-        for item in genres[page_number * page_size:(page_number + 1) * page_size]:
-            kb.row(InlineKeyboardButton(text=item["name"][:64], callback_data=f"browse:{item['code']}"))
-        if page_number:
-            kb.row(InlineKeyboardButton(text="← Назад", callback_data=f"browse:genres-{page_number - 1}"))
-        if (page_number + 1) * page_size < len(genres):
-            kb.row(InlineKeyboardButton(text="Дальше →", callback_data=f"browse:genres-{page_number + 1}"))
-        await message.answer("<b>Жанры Flibusta</b>\nРекомендации сообщества по жанру.", reply_markup=kb.as_markup())
-        return
-    if not books:
-        await message.answer("Источник не вернул подборку. Попробуй позже.")
-        return
-    session = _create_search_session(message.from_user.id, message.chat.id, title, books,
-                                     title=escape(title) + "\n" + escape(freshness_notice(status)))
-    await message.answer(_search_results_text(session), reply_markup=_search_results_keyboard(session))
+        if action == "shelf": text, markup = "<b>Моя полка</b>", shelf_menu()
+        elif action == "catalog": pass
+        elif action == "tops": text, markup = "<b>Популярное</b>", tops_menu()
+        elif action == "random":
+            book = await popular_collections.random_book()
+            if not book:
+                text = "Пока нет книг для случайного выбора."
+            else:
+                session = _create_search_session(message.from_user.id,message.chat.id,"Случайная книга",[book],title="Случайная книга",return_to="browse:catalog")
+                text, markup = _search_results_text(session), _search_results_keyboard(session)
+        elif action.startswith("top:") or action == "week":
+            source = action.split(":",1)[1] if ":" in action else "flibusta"
+            books = await popular_collections.books(source)
+            if not books:
+                text,markup = "Подборка пока недоступна. Попробуй позже.",tops_menu()
+            else:
+                title = SOURCES[source]
+                session = _create_search_session(message.from_user.id,message.chat.id,title,books,
+                                                 title=escape(title),return_to="browse:tops")
+                text,markup = _search_results_text(session),_search_results_keyboard(session)
+        elif action in {"genres"} or action.startswith(("groups:","group:")):
+            genres = await flibusta.genres()
+            text,markup = genre_menu(genres,action)
+        else:
+            # Accept previous public genre callbacks as well as the new namespace.
+            code = genre or action.removeprefix("genre:")
+            title,books,_,status = await browse_catalog(flibusta,code)
+            genres = await flibusta.genres()
+            selected = next(g for g in genres if g['code']==code)
+            siblings = genre_groups(genres)[group_key(group_name(selected))]['genres']
+            page = next(i for i,g in enumerate(siblings) if g['code']==code)//8
+            parent = f"browse:group:{group_key(group_name(selected))}:{page}"
+            if not books: text,markup = "В этом жанре пока нет подборки.",genre_menu(genres)[1]
+            else:
+                session = _create_search_session(message.from_user.id,message.chat.id,title,books,title=escape(selected['name']),return_to=parent)
+                text,markup = _search_results_text(session),_search_results_keyboard(session)
+    except (FlibustaError, TimeoutError, ValueError, KeyError, StopIteration):
+        text,markup = "Подборка сейчас недоступна. Попробуй позже.",catalog_menu()
+    if edit:
+        try:
+            await message.edit_text(text,reply_markup=markup)
+        except TelegramBadRequest as exc:
+            if "message is not modified" not in str(exc).lower():
+                raise
+    else:
+        await message.answer(text,reply_markup=markup)
 
 
 @router.message(Command("help"))
@@ -377,7 +417,7 @@ async def favorites_command(message: Message) -> None:
 @router.callback_query(F.data == "home_favorites")
 async def home_favorites(callback: CallbackQuery) -> None:
     await callback_answer(callback)
-    await _send_favorites_page(callback.message, callback.from_user.id, 0)
+    await _send_favorites_page(callback.message, callback.from_user.id, 0, edit=True)
 
 @router.callback_query(F.data.startswith("fav_page:"))
 async def favorites_page(callback: CallbackQuery) -> None:
@@ -396,7 +436,7 @@ async def history_failed_command(message: Message) -> None:
 @router.callback_query(F.data == "home_history")
 async def home_history(callback: CallbackQuery) -> None:
     await callback_answer(callback)
-    await _send_history_message(callback.message, callback.from_user.id)
+    await _send_history_message(callback.message, callback.from_user.id, edit=True)
 
 
 @router.callback_query(F.data == "history_failed")
@@ -412,7 +452,7 @@ async def last_command(message: Message) -> None:
 @router.callback_query(F.data == "home_last")
 async def home_last(callback: CallbackQuery) -> None:
     await callback_answer(callback)
-    await _send_last_message(callback.message, callback.from_user.id)
+    await _send_last_message(callback.message, callback.from_user.id, edit=True)
 
 
 @router.callback_query(F.data == "home")
@@ -439,18 +479,18 @@ async def search_help_callback(callback: CallbackQuery) -> None:
         await callback.message.answer(search_help_text(), reply_markup=back_home_keyboard())
 
 
-async def _send_history_message(message: Message, user_id: int, *, failed: bool = False) -> None:
+async def _send_history_message(message: Message, user_id: int, *, failed: bool = False, edit: bool = False) -> None:
     items = await download_history_repo.recent(user_id, status="failed" if failed else "sent")
-    await message.answer(
+    await (message.edit_text if edit else message.answer)(
         _history_text(items, failed=failed),
         reply_markup=_history_keyboard(items, failed=failed),
     )
 
 
-async def _send_last_message(message: Message, user_id: int) -> None:
+async def _send_last_message(message: Message, user_id: int, *, edit: bool = False) -> None:
     item = await last_books_repo.get(user_id)
     if item is None:
-        await message.answer("<b>Последняя книга</b>\n\nПока пусто. Открой любую карточку — и она появится здесь.", reply_markup=back_home_keyboard())
+        await (message.edit_text if edit else message.answer)("<b>Последняя книга</b>\n\nПока пусто. Открой любую карточку — и она появится здесь.", reply_markup=back_home_keyboard())
         return
     preferred = await _preferred_format(user_id) or "epub"
     kb = InlineKeyboardBuilder()
@@ -458,7 +498,7 @@ async def _send_last_message(message: Message, user_id: int) -> None:
     kb.row(InlineKeyboardButton(text=f"⬇️ {preferred.upper()}", callback_data=f"dl:{item.book_id}:{preferred}"), InlineKeyboardButton(text="📤 Kindle", callback_data=f"kindle:{item.book_id}"))
     kb.row(InlineKeyboardButton(text="⭐ В избранное", callback_data=f"fav_add:{item.book_id}"))
     kb.row(InlineKeyboardButton(text="🏠 В меню", callback_data="home"))
-    await message.answer(f"<b>Последняя книга</b>\n\n<b>{escape(item.title)}</b>" + (f"\n{escape(item.author)}" if item.author else ""), reply_markup=kb.as_markup())
+    await (message.edit_text if edit else message.answer)(f"<b>Последняя книга</b>\n\n<b>{escape(item.title)}</b>" + (f"\n{escape(item.author)}" if item.author else ""), reply_markup=kb.as_markup())
 
 @router.message(Command("admin_cache_stats"))
 async def admin_cache_stats(message: Message) -> None:
@@ -522,8 +562,11 @@ async def search_text(message: Message) -> None:
     if text.startswith("/"):
         return
 
+    if text in {"📚 Моя полка", "🔎 Каталог"}:
+        await send_catalog_browse(message, action="shelf" if text == "📚 Моя полка" else "catalog")
+        return
     if text in {"🔥 Популярное", "📖 Жанры"}:
-        await send_catalog_browse(message, genres_only=text == "📖 Жанры")
+        await send_catalog_browse(message, action="genres" if text == "📖 Жанры" else "tops")
         return
     if text == FAVORITES_BUTTON:
         await favorites_command(message); return
@@ -549,9 +592,18 @@ async def search_text(message: Message) -> None:
     # Telegram messages. SearchService owns author/title routing and fallbacks.
     await send_smart_results(message, text)
 
-@router.callback_query(F.data.startswith("book:"))
+@router.callback_query(F.data.startswith("book:") | F.data.startswith("cbook:"))
 async def show_book(callback: CallbackQuery) -> None:
-    book_id = callback.data.split(":", 1)[1]
+    origin = None
+    if callback.data.startswith("cbook:"):
+        _, sid, book_id = callback.data.split(":", 2)
+        origin = search_sessions.get(sid)
+        if (origin is None or origin.user_id != callback.from_user.id or origin.chat_id != callback.message.chat.id
+                or not any(book.book_id == book_id for book in origin.results)):
+            await callback_answer(callback, "Подборка устарела. Открой её заново.")
+            return
+    else:
+        book_id = callback.data.split(":", 1)[1]
     started_at = monotonic()
     log_user_action(callback.from_user, callback.message.chat.id, "book_open", book_id=book_id)
     await callback_answer(callback)
@@ -582,7 +634,19 @@ async def show_book(callback: CallbackQuery) -> None:
     preferred_format = await _preferred_format(callback.from_user.id)
     await last_books_repo.upsert(callback.from_user.id, details.book_id, details.title, ", ".join(details.authors) or None, "opened")
     is_favorite = await favorites_repo.exists(callback.from_user.id, details.book_id)
-    await send_book_card(callback.message, details, preferred_format=preferred_format, is_favorite=is_favorite)
+    if origin:
+        keyboard = render_formats_keyboard(details, preferred_format=preferred_format, is_favorite=is_favorite,
+                                           annotation_max_chars=settings.book_annotation_max_chars)
+        kb = InlineKeyboardBuilder.from_markup(keyboard) if keyboard else InlineKeyboardBuilder()
+        if origin.query == "Случайная книга":
+            kb.row(InlineKeyboardButton(text="🎲 Ещё",callback_data=f"browse:random:{book_id}"))
+            back = "browse:catalog"
+        else:
+            back = f"page:{origin.session_id}:{origin.page}"
+        kb.row(InlineKeyboardButton(text="← В подборку" if origin.query != "Случайная книга" else "← Каталог",callback_data=back))
+        await callback.message.edit_text(render_book_text(details, settings.book_annotation_max_chars), reply_markup=kb.as_markup())
+    else:
+        await send_book_card(callback.message, details, preferred_format=preferred_format, is_favorite=is_favorite)
 
 
 async def send_book_card(message: Message, details, *, preferred_format: str | None, is_favorite: bool) -> None:
@@ -741,15 +805,7 @@ async def paginate_search(callback: CallbackQuery) -> None:
         await telegram_retry(lambda: callback.message.answer("Такой страницы уже нет."))
         return
 
-    updated = SearchSession(
-        session_id=session.session_id,
-        user_id=session.user_id,
-        chat_id=session.chat_id,
-        query=session.query,
-        title=session.title,
-        page=page,
-        results=session.results,
-    )
+    updated = replace(session, page=page)
     search_sessions[session_id] = updated
     log_user_action(
         callback.from_user,
@@ -1651,6 +1707,7 @@ async def main() -> None:
     )
     dispatcher.include_router(router)
     try:
+        popular_collections.start()
         await kindle_queue.start(bot)
         if settings.web_configured and web_access_repo is not None:
             await web_access_repo.prune_expired()
@@ -1679,6 +1736,7 @@ async def main() -> None:
                     cover_download_max_bytes=settings.cover_max_download_mb * 1024 * 1024,
                     cover_download_timeout_seconds=settings.cover_lookup_timeout_seconds,
                     search_stats_repo=search_stats_repo,
+                    popular_collections=popular_collections,
                 ),
                 host=settings.web_host,
                 port=settings.web_port,
@@ -1700,6 +1758,7 @@ async def main() -> None:
     finally:
         if web_runner is not None:
             await web_runner.cleanup()
+        await popular_collections.stop()
         await kindle_queue.stop()
         await flibusta.close()
         await bot.session.close()

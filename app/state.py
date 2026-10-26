@@ -5,7 +5,7 @@ from app.flibusta import AuthorResult
 
 @dataclass(frozen=True)
 class SearchSession:
- session_id:str; user_id:int; chat_id:int; query:str; title:str|None; page:int; results:list
+ session_id:str; user_id:int; chat_id:int; query:str; title:str|None; page:int; results:list; return_to:str|None=None
 @dataclass(frozen=True)
 class AuthorSession:
  session_id:str; user_id:int; chat_id:int; query:str; page:int; authors:list[AuthorResult]
@@ -14,8 +14,8 @@ author_sessions:dict[str,AuthorSession]={}
 retry_sessions:dict[str,str]={}
 search_timestamps:dict[int,list[float]]={}
 
-def create_search_session(user_id:int,chat_id:int,query:str,results:list,title:str|None=None)->SearchSession:
- prune_sessions(search_sessions); session=SearchSession(uuid4().hex[:10],user_id,chat_id,query,title,0,results); search_sessions[session.session_id]=session; return session
+def create_search_session(user_id:int,chat_id:int,query:str,results:list,title:str|None=None,return_to:str|None=None)->SearchSession:
+ prune_sessions(search_sessions); session=SearchSession(uuid4().hex[:10],user_id,chat_id,query,title,0,results,return_to); search_sessions[session.session_id]=session; return session
 
 def create_author_session(user_id:int,chat_id:int,query:str,authors:list[AuthorResult])->AuthorSession:
  prune_sessions(author_sessions); session=AuthorSession(uuid4().hex[:10],user_id,chat_id,query,0,authors); author_sessions[session.session_id]=session; return session

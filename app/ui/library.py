@@ -11,17 +11,19 @@ from app.state import SearchSession, AuthorSession
 def search_results_text(session:SearchSession,title:str|None=None)->str:
  total=len(session.results); pages=total_pages(total); start=session.page*SEARCH_PAGE_SIZE+1; end=min(total,(session.page+1)*SEARCH_PAGE_SIZE)
  heading=title or session.title or f'<b>Нашёл книги</b>\nЗапрос: <b>{escape(session.query)}</b>'
+ if session.return_to: return heading
  page_text=f'\nСтраница {session.page+1}/{pages}' if pages>1 else ''
  return f'{heading}\n\nПоказаны {start}–{end} из {total}{page_text}'
 def search_results_keyboard(session:SearchSession):
  kb=InlineKeyboardBuilder()
- for item in page_items(session.results,session.page): kb.row(InlineKeyboardButton(text=(item.title if not item.author else f'{item.title} - {item.author}')[:64],callback_data=f'book:{item.book_id}'))
+ for item in page_items(session.results,session.page): kb.row(InlineKeyboardButton(text=(item.title if not item.author else f'{item.title} - {item.author}')[:64],callback_data=(f'cbook:{session.session_id}:{item.book_id}' if session.return_to else f'book:{item.book_id}')))
  pages=total_pages(len(session.results)); nav=[]
  if pages>1:
   if session.page>0: nav.append(InlineKeyboardButton(text='<< Назад',callback_data=f'page:{session.session_id}:{session.page-1}'))
   nav.append(InlineKeyboardButton(text=f'{session.page+1}/{pages}',callback_data='noop'))
   if session.page<pages-1: nav.append(InlineKeyboardButton(text='Еще >>',callback_data=f'page:{session.session_id}:{session.page+1}'))
  if nav: kb.row(*nav)
+ if session.return_to: kb.row(InlineKeyboardButton(text='← Назад к разделу',callback_data=session.return_to))
  return kb.as_markup()
 def author_results_text(session:AuthorSession)->str:
  total=len(session.authors); pages=total_pages(total); start=session.page*SEARCH_PAGE_SIZE+1; end=min(total,(session.page+1)*SEARCH_PAGE_SIZE)
@@ -87,7 +89,8 @@ def formats_keyboard(details:BookDetails,preferred_format:str|None,is_favorite:b
  if details.annotation and len(details.annotation)>annotation_max_chars: kb.row(InlineKeyboardButton(text='📖 Описание полностью',callback_data=f'annotation:{details.book_id}'))
  return kb.as_markup()
 def main_reply_keyboard():
- return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='⭐ Избранное'),KeyboardButton(text='🕘 История')],[KeyboardButton(text='📚 Последняя'),KeyboardButton(text='📱 Мои устройства')],[KeyboardButton(text='🔥 Популярное'),KeyboardButton(text='📖 Жанры')],[KeyboardButton(text='❓ Помощь')]],resize_keyboard=True,is_persistent=True,input_field_placeholder='Название книги или автор')
+ return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text='📚 Моя полка'),KeyboardButton(text='🔎 Каталог')]],resize_keyboard=True,is_persistent=True,input_field_placeholder='Название книги или автор')
+
 def history_text(
     items: list[DownloadHistoryItem],
     failed: bool = False,

@@ -79,3 +79,12 @@ def test_genre_selection_validates_against_actual_catalog_and_restores_context()
         assert search_status.get() is None
 
     asyncio.run(scenario())
+
+
+def test_source_genre_headings_are_preserved():
+    async def scenario():
+        html='<div id="main"><h3>Фантастика</h3><ul><li><a href="/g/sf">Научная фантастика</a></li></ul><h3>Проза</h3><a href="/g/prose">Проза</a></div>'
+        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda r:httpx.Response(200,text=html))) as http:
+            rows=await FlibustaClient('https://catalog.test',client=http).genres()
+            assert [g['group'] for g in rows]==['Фантастика','Проза']
+    asyncio.run(scenario())
