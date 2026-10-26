@@ -655,3 +655,78 @@ def test_coalesced_stale_provenance_is_request_local(tmp_path):
         finally:
             await cached.close()
     run(scenario())
+
+
+def test_telegram_author_query_shows_works_and_ambiguous_names_require_choice(monkeypatch):
+    import app.main as main
+    from app.services.search import SearchService
+
+    class Catalog:
+        async def search_authors(self, query, limit):
+            return [AuthorResult("1", "Лев Толстой"), AuthorResult("2", "Алексей Толстой")]
+
+        async def author_books(self, author_id, limit):
+            return "Лев Толстой", [SearchResult("200", "Война и мир", "Лев Толстой")]
+
+    monkeypatch.setattr(main, "search_service", SearchService(Catalog(), book_limit=40, author_limit=20))
+    main.search_timestamps.clear()
+    message = _FakeMessage()
+    run(main.send_smart_results(message, "лев толстой"))
+    text = " ".join(text for text, _ in message.answers + message.edit_payloads)
+    assert "Книги автора" in text
+    buttons = [b for row in message.edit_payloads[-1][1]["reply_markup"].inline_keyboard for b in row]
+    assert any(b.callback_data == "book:200" for b in buttons)
+    ambiguous = _FakeMessage()
+    run(main.send_smart_results(ambiguous, "Толстой"))
+    assert "Уточни автора" in " ".join(text for text, _ in ambiguous.answers + ambiguous.edit_payloads)
+
+
+def test_telegram_author_typo_requires_user_confirmation(monkeypatch):
+    import app.main as main
+    from app.services.search import SearchService
+
+    class Catalog:
+        async def search_authors(self, query, limit):
+            return []
+
+    monkeypatch.setattr(main, "search_service", SearchService(Catalog(), book_limit=40, author_limit=20))
+    main.search_timestamps.clear()
+    message = _FakeMessage()
+    run(main.send_smart_results(message, "лев толтсой"))
+    text = " ".join(text for text, _ in message.answers + message.edit_payloads)
+    assert "Вы имели в виду" in text and "Лев Толстой" in text
+    buttons = [b for row in message.edit_payloads[-1][1]["reply_markup"].inline_keyboard for b in row]
+    assert any(b.callback_data.startswith("authorfix:") for b in buttons)
+
+
+def test_author_confirmation_checks_owner_and_preserves_human_identity(monkeypatch):
+    from datetime import UTC, datetime
+    from aiogram.types import CallbackQuery, Chat, Message, User
+    import app.main as main
+
+    human = User(id=777, is_bot=False, first_name="Reader")
+    bot = User(id=999, is_bot=True, first_name="Bot")
+    msg = Message(message_id=10, date=datetime(2026, 1, 1, tzinfo=UTC),
+                  chat=Chat(id=777, type="private"), from_user=bot)
+    session = main._create_search_session(777, 777, "Лев Толстой", [])
+    calls = []
+
+    async def acknowledge(*args, **kwargs):
+        pass
+
+    async def search(message, query):
+        calls.append((message.from_user.id, query))
+
+    monkeypatch.setattr(main, "callback_answer", acknowledge)
+    monkeypatch.setattr(main, "send_smart_results", search)
+    try:
+        wrong = CallbackQuery(id="bad", from_user=User(id=778, is_bot=False, first_name="Other"),
+                              chat_instance="chat", message=msg, data=f"authorfix:{session.session_id}")
+        run(main.confirm_author_search(wrong))
+        assert not calls
+        own = CallbackQuery(id="ok", from_user=human, chat_instance="chat", message=msg,
+                            data=f"authorfix:{session.session_id}")
+        run(main.confirm_author_search(own))
+        assert calls == [(777, "Лев Толстой")]
+    finally:
+        main.search_sessions.pop(session.session_id, None)

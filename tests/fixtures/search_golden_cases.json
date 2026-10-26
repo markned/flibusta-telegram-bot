@@ -305,5 +305,65 @@
     "query": "книги как 1984",
     "kind": "unsupported_topic",
     "tier": "regression"
+  },
+  {
+    "query": "лев толстой",
+    "kind": "author_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "Толстой",
+    "kind": "author_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "книги Льва Толстого",
+    "kind": "author_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "произведения Фёдора Достоевского",
+    "kind": "author_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "книги Толстого",
+    "kind": "author_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "агата кристи",
+    "kind": "author_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "джейн остин",
+    "kind": "author_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "Стивен Кинг",
+    "kind": "author_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "лев толтсой",
+    "kind": "author_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "Толстой Война и мир",
+    "kind": "author_title_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "«Лев Толстой»",
+    "kind": "exact_search",
+    "tier": "author-intent-regression"
+  },
+  {
+    "query": "Джейн Эйр",
+    "kind": "exact_search",
+    "tier": "author-intent-regression"
   }
 ]

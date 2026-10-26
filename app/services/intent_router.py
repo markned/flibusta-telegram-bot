@@ -5,6 +5,7 @@ from enum import Enum
 import re
 
 from app.services.query_analyzer import analyze_query
+from app.services.author_names import (KNOWN_AUTHOR_NAMES, canonical_author_query, is_known_author_query, known_surnames, name_tokens, suggest_author_query)
 from app.services.search_logic import clean_query, norm
 
 
@@ -72,26 +73,6 @@ KNOWN_SURNAMES = {
     "мураками",
     "герберт",
 }
-KNOWN_AUTHOR_NAMES = {
-    ("лев", "толстой"): "Лев Толстой",
-    ("лев", "николаевич", "толстой"): "Лев Толстой",
-    ("федор", "достоевский"): "Фёдор Достоевский",
-    ("фёдор", "достоевский"): "Фёдор Достоевский",
-    ("федор", "михайлович", "достоевский"): "Фёдор Достоевский",
-    ("фёдор", "михайлович", "достоевский"): "Фёдор Достоевский",
-    ("михаил", "булгаков"): "Михаил Булгаков",
-    ("виктор", "пелевин"): "Виктор Пелевин",
-    ("владимир", "сорокин"): "Владимир Сорокин",
-    ("джордж", "оруэлл"): "Джордж Оруэлл",
-    ("олдос", "хаксли"): "Олдос Хаксли",
-    ("евгений", "замятин"): "Евгений Замятин",
-    ("эдит", "патту"): "Эдит Патту",
-    ("пол", "остер"): "Пол Остер",
-    ("харуки", "мураками"): "Харуки Мураками",
-    ("аркадий", "стругацкий"): "Аркадий Стругацкий",
-    ("антон", "чехов"): "Антон Чехов",
-    ("фрэнк", "герберт"): "Фрэнк Герберт",
-}
 FIRST_NAMES = {
     "эдит",
     "лев",
@@ -154,6 +135,19 @@ def route_intent(query: str) -> IntentDecision:
             ["broad_topic_not_supported"],
         )
 
+    author_prefix = re.match(r"^(?:книги|произведения)(?:\s+автора)?\s+(.+)$", cleaned, re.I)
+    author_query = author_prefix.group(1) if author_prefix else cleaned
+    canonical = canonical_author_query(author_query)
+    single_surname = len(author_query.split()) == 1 and canonical in (KNOWN_SURNAMES | known_surnames())
+    typo = suggest_author_query(author_query)
+    if ((author_prefix and 1 <= len(author_query.split()) <= 4)
+            or is_known_author_query(author_query) or single_surname or typo):
+        return _decision(
+            IntentKind.AUTHOR_SEARCH, 0.95 if not typo else 0.65,
+            query, cleaned, canonical, canonical, None, analysis.format_hint,
+            ["explicit_author" if author_prefix else "author_identity" if not typo else "author_typo"],
+        )
+
     detected = detect_author_title_query(cleaned)
     if detected:
         author, title = detected
@@ -175,7 +169,7 @@ def route_intent(query: str) -> IntentDecision:
             query,
             cleaned,
             cleaned,
-            None,
+            canonical_author_query(cleaned),
             None,
             analysis.format_hint,
             ["person_name"],
@@ -254,10 +248,10 @@ def _known_author_at_edge(words: list[str], lowered: list[str]) -> tuple[str, st
     for size in (3, 2):
         if len(words) <= size:
             continue
-        start = tuple(lowered[:size])
+        start = name_tokens(" ".join(words[:size]))
         if start in KNOWN_AUTHOR_NAMES:
             return KNOWN_AUTHOR_NAMES[start], " ".join(words[size:])
-        end = tuple(lowered[-size:])
+        end = name_tokens(" ".join(words[-size:]))
         if end in KNOWN_AUTHOR_NAMES:
             return KNOWN_AUTHOR_NAMES[end], " ".join(words[:-size])
     return None

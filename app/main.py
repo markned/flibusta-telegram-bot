@@ -1021,7 +1021,7 @@ async def download_book(callback: CallbackQuery) -> None:
     await last_books_repo.upsert(callback.from_user.id, book_id, details.title, ", ".join(details.authors) or None, "downloaded")
 
 
-async def send_search_results(message: Message, query: str) -> None:
+async def send_search_results(message: Message, query: str, *, about_author: bool = False) -> None:
     if not _allow_search(message.from_user.id):
         await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
         return
@@ -1031,7 +1031,7 @@ async def send_search_results(message: Message, query: str) -> None:
     )
     log_user_action(message.from_user, message.chat.id, "search_start", query=query)
     try:
-        outcome = await search_service.search_books(query)
+        outcome = await search_service.search_about_author(query) if about_author else await search_service.search_books(query)
     except (FlibustaError, TimeoutError) as exc:
         text = str(exc) if isinstance(exc, FlibustaError) else "Поиск занял слишком много времени. Попробуй ещё раз через минуту."
         await _send_or_edit(message, progress, text)
@@ -1039,7 +1039,7 @@ async def send_search_results(message: Message, query: str) -> None:
     if not outcome.books:
         await _send_no_results(message, query, progress=progress)
         return
-    heading = "<b>Приблизительные совпадения</b>" if outcome.approximate else "<b>Нашёл книги</b>"
+    heading = "<b>Книги об авторе</b>" if about_author else "<b>Приблизительные совпадения</b>" if outcome.approximate else "<b>Нашёл книги</b>"
     notice = escape(outcome_notice(outcome))
     session = _create_search_session(message.from_user.id, message.chat.id, query, outcome.books,
                                      title=f"{notice}\n\n{heading}" if notice else heading)
@@ -1125,6 +1125,33 @@ async def send_author_results(message: Message, query: str, *, show_no_results: 
     return True
 
 
+def _author_intent_keyboard(message: Message, query: str, suggestion=None, base=None):
+    kb = InlineKeyboardBuilder.from_markup(base) if base is not None else InlineKeyboardBuilder()
+    if suggestion:
+        correction = _create_search_session(message.from_user.id, message.chat.id, suggestion, [])
+        kb.row(InlineKeyboardButton(text=f"Искать: {suggestion}"[:64], callback_data=f"authorfix:{correction.session_id}"))
+    about = _create_search_session(message.from_user.id, message.chat.id, query, [])
+    kb.row(InlineKeyboardButton(text="Книги об авторе", callback_data=f"authorabout:{about.session_id}"))
+    return kb.as_markup()
+
+
+@router.callback_query(F.data.startswith("authorfix:") | F.data.startswith("authorabout:"))
+async def confirm_author_search(callback: CallbackQuery) -> None:
+    action, sid = callback.data.split(":", 1)
+    session = search_sessions.get(sid)
+    if session is None or session.user_id != callback.from_user.id or session.chat_id != callback.message.chat.id:
+        await callback_answer(callback, "Этот вариант недоступен. Отправь запрос ещё раз.")
+        return
+    await callback_answer(callback)
+    # Callback messages are sent by the bot; preserve the human identity for
+    # rate limiting, preferences and ownership of newly created result sessions.
+    message = callback.message.model_copy(update={"from_user": callback.from_user})
+    if action == "authorfix":
+        await send_smart_results(message, session.query)
+    else:
+        await send_search_results(message, session.query, about_author=True)
+
+
 async def send_smart_results(message: Message, query: str, *, show_no_results: bool = True) -> bool:
     if not _allow_search(message.from_user.id):
         await telegram_retry(lambda: message.answer("Слишком много запросов подряд. Подожди немного и попробуй снова."))
@@ -1163,10 +1190,24 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
     top_book_is_exact = bool(books and _norm(_base_title(books[0].title)) == _norm(plan.title or plan.cleaned_query))
     top_author_is_exact = bool(authors and _norm(authors[0].name) == _norm(plan.author or plan.cleaned_query))
 
-    if plan.mode == SearchMode.AUTHOR and authors:
-        session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
-        await _send_or_edit(message, progress, notice + _author_results_text(session), reply_markup=_author_results_keyboard(session))
-        return True
+    if plan.mode == SearchMode.AUTHOR:
+        author_query = plan.author or plan.cleaned_query
+        if len(authors) == 1 and books:
+            heading = f"<b>Книги автора: {escape(authors[0].name)}</b>"
+            session = _create_search_session(message.from_user.id, message.chat.id, plan.original_query, books,
+                                             title=notice + heading)
+            markup = _author_intent_keyboard(message, author_query, base=_search_results_keyboard(session))
+            await _send_or_edit(message, progress, _search_results_text(session), reply_markup=markup)
+        elif authors:
+            session = _create_author_session(message.from_user.id, message.chat.id, author_query, authors)
+            heading = "<b>Уточни автора</b>\n" if len(authors) > 1 else ""
+            markup = _author_intent_keyboard(message, author_query, base=_author_results_keyboard(session))
+            await _send_or_edit(message, progress, notice + heading + _author_results_text(session), reply_markup=markup)
+        else:
+            text = f"Вы имели в виду: <b>{escape(outcome.suggested_query)}</b>?" if outcome.suggested_query else "Автор не найден. Проверь имя или выбери другой способ поиска."
+            markup = _author_intent_keyboard(message, author_query, outcome.suggested_query)
+            await _send_or_edit(message, progress, notice + text + f"\nЗапрос: <b>{escape(query)}</b>", reply_markup=markup)
+        return bool(books or authors)
 
     if plan.mode == SearchMode.AUTHOR_TITLE and books:
         session = _create_search_session(

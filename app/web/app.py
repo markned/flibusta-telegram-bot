@@ -242,14 +242,16 @@ async def _search(request: web.Request) -> web.Response:
     except ValueError:
         page_number = 0
     try:
-        if expanded:
+        if request.query.get("mode") == "about":
+            outcome = await deps.search_service.search_about_author(query)
+        elif expanded:
             outcome = await deps.search_service.search(query, expanded=True)
         else:
             outcome = await deps.search_service.search(query)
     except (FlibustaError, TimeoutError):
         return _html(ui.search_page(
             query, [], [], error="Источник временно недоступен. Не удалось проверить наличие книги.",
-            retry=True, expanded=expanded,
+            retry=True, expanded=expanded, about_author=request.query.get("mode") == "about",
         ), status=503)
     error = None
     if outcome.plan.mode.value == "unsupported_topic":
@@ -263,6 +265,8 @@ async def _search(request: web.Request) -> web.Response:
         notice=outcome_notice(outcome), match_query=outcome.plan.title or outcome.plan.cleaned_query,
         has_more=outcome.has_more, retry=outcome.source_unavailable or outcome.partial,
         expanded=expanded, page_number=page_number,
+        author_query=(outcome.plan.author or outcome.plan.cleaned_query) if outcome.plan.mode.value == "author" else None,
+        suggested_query=outcome.suggested_query, about_author=outcome.about_author,
     ), status=503 if error and outcome.source_unavailable else 200)
 
 
