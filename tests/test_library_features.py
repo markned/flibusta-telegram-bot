@@ -570,3 +570,88 @@ def test_book_card_photo_failure_falls_back_to_text(monkeypatch):
     message = BadPhotoMessage()
     run(main.send_book_card(message, _book_details_for_card(cover_url="https://example.com/cover.jpg"), preferred_format="epub", is_favorite=False))
     assert message.answers
+
+
+def test_search_returns_dated_stale_cache_before_slow_refresh(tmp_path):
+    from app.services.search import SearchService
+
+    class SlowCatalog:
+        async def search(self, *args, **kwargs):
+            await asyncio.Event().wait()
+
+        async def close(self):
+            pass
+
+    async def scenario():
+        db = Database(str(tmp_path / "stale.db"))
+        await db.initialize()
+        repo = CacheRepository(db)
+        await repo.set("book_search:дюна:10", "book_search", [SearchResult("10", "Дюна", "Фрэнк Герберт")], -1)
+        cached = CachedFlibustaClient(SlowCatalog(), repo, enabled=True, ttls={"book_search": 60},
+                                      source_timeout_seconds=10, stale_refresh_timeout_seconds=0.05)
+        try:
+            service = SearchService(cached, book_limit=10, author_limit=10, timeout_seconds=0.5)
+            result = await asyncio.wait_for(service.search("Дюна"), timeout=0.3)
+            assert result.books[0].book_id == "10"
+            assert result.stale_at is not None
+            assert result.source_unavailable is True
+        finally:
+            await cached.close()
+
+    run(scenario())
+
+
+def test_telegram_search_marks_approximate_stale_results(monkeypatch):
+    from dataclasses import replace
+    import app.main as main
+
+    class Service:
+        async def search(self, query):
+            return replace(_outcome(query, mode=SearchMode.AUTHOR_TITLE,
+                                    books=[SearchResult("10", "Дюны", "Фрэнк Герберт")]),
+                           approximate=True, source_unavailable=True,
+                           stale_at="2026-01-02T03:04:00+00:00")
+
+    monkeypatch.setattr(main, "search_service", Service())
+    main.search_timestamps.clear()
+    message = _FakeMessage()
+    run(main.send_smart_results(message, "Дюна Герберт"))
+    text = " ".join(text for text, _ in message.answers + message.edit_payloads)
+    assert "Результаты из кэша" in text and "02.01.2026" in text
+    assert "Приблизительные совпадения" in text
+    assert "<b>Нашёл книгу</b>" not in text
+
+
+def test_coalesced_stale_provenance_is_request_local(tmp_path):
+    from app.services.search import SearchService
+
+    class Catalog:
+        def __init__(self):
+            self.calls = 0
+
+        async def search(self, query, limit=10):
+            self.calls += 1
+            if query == "Дюна":
+                await asyncio.Event().wait()
+            return [SearchResult("11", "Идиот", "Федор Достоевский")]
+
+        async def close(self):
+            pass
+
+    async def scenario():
+        db = Database(str(tmp_path / "shared.db"))
+        await db.initialize()
+        repo = CacheRepository(db)
+        await repo.set("book_search:дюна:10", "book_search", [SearchResult("10", "Дюна", "Фрэнк Герберт")], -1)
+        raw = Catalog()
+        cached = CachedFlibustaClient(raw, repo, enabled=True, ttls={"book_search": 60},
+                                      stale_refresh_timeout_seconds=0.05)
+        service = SearchService(cached, book_limit=10, author_limit=10)
+        try:
+            first, second, fresh = await asyncio.gather(service.search("Дюна"), service.search("Дюна"), service.search("Идиот"))
+            assert first.stale_at == second.stale_at and first.stale_at is not None
+            assert fresh.stale_at is None and fresh.source_unavailable is False
+            assert raw.calls == 2
+        finally:
+            await cached.close()
+    run(scenario())

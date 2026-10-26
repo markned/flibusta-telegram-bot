@@ -1,0 +1,4 @@
+# Development only; never installed by production deployment.
+pytest>=8.0,<9
+ruff==0.14.14
+PyYAML>=6,<7

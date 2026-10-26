@@ -1,0 +1,131 @@
+{
+  "note": "Declarative routing guidance, not a Codex runtime hook. Skip inapplicable stages. Complex-feature interview only for unresolved design; to-tickets only across sessions. User explicit skill wins. Never run competing planners. Tests precede minimal fixes; measurements precede performance claims.",
+  "routes": [
+    {
+      "id": "complex-feature",
+      "skills": [
+        "grill-with-docs",
+        "to-spec",
+        "to-tickets",
+        "scoped-change",
+        "test-driven-development",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "new-idea",
+      "skills": [
+        "grill-me"
+      ]
+    },
+    {
+      "id": "bug",
+      "skills": [
+        "systematic-debugging",
+        "add-tests",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "search",
+      "skills": [
+        "scoped-change",
+        "search-regression",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "reader",
+      "skills": [
+        "scoped-change",
+        "reader-delivery-test",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "web-auth",
+      "skills": [
+        "web-auth-and-eink",
+        "differential-review",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "sqlite",
+      "skills": [
+        "sqlite-migration-safe",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "performance",
+      "skills": [
+        "low-memory-audit",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "telegram",
+      "skills": [
+        "scoped-change",
+        "telegram-flow-test",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "parser",
+      "skills": [
+        "scoped-change",
+        "flibusta-parser-fixtures",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "id": "docs",
+      "skills": [
+        "scoped-change",
+        "verification-before-completion"
+      ]
+    }
+  ],
+  "smoke": [
+    {
+      "route": "search",
+      "expected": [
+        "scoped-change",
+        "search-regression",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "route": "reader",
+      "expected": [
+        "scoped-change",
+        "reader-delivery-test",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "route": "web-auth",
+      "expected": [
+        "web-auth-and-eink",
+        "differential-review",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "route": "sqlite",
+      "expected": [
+        "sqlite-migration-safe",
+        "verification-before-completion"
+      ]
+    },
+    {
+      "route": "docs",
+      "expected": [
+        "scoped-change",
+        "verification-before-completion"
+      ]
+    }
+  ]
+}

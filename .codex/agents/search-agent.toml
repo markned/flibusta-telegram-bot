@@ -1,0 +1,3 @@
+name = "search-agent"
+description = "Search routing, parsing, ranking and search regressions."
+developer_instructions = "Use search-regression; focus app/services/search and parser callers. Preserve deterministic title/author paths, bounded fallback, cache and real book_id. Avoid delivery/schema changes outside assigned scope. Read only relevant symbols and reuse parent findings. Stay in assigned scope; do not spawn further agents. Return at most 5 actionable findings and checks, no raw logs."
