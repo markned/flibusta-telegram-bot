@@ -1,0 +1,46 @@
+{
+  "baseline_commit": "5d4f7096ddc753a48079e1c768a00af761f382b1",
+  "date": "2026-10-26",
+  "limits": "Synthetic lexical fixture timing is not production latency. Live metadata-only check blocked by connectivity; no absence inferred. No book downloads.",
+  "synthetic_before": {
+    "mode": "synthetic (fixture IDs; no evidence of Flibusta availability)",
+    "seed": 20261026,
+    "selected_books": 30,
+    "planned_cases": 90,
+    "executed_cases": 90,
+    "top5_matches": 90,
+    "unresolved_availability": 0,
+    "source_unavailable": 0,
+    "replay_incomplete": 0,
+    "median_seconds": 0.0084,
+    "p95_seconds": 0.0191,
+    "warning": "No missing result establishes catalog absence. Live/replay metadata must be reviewed before declaring availability or absence."
+  },
+  "synthetic_after": {
+    "mode": "synthetic (fixture IDs; no evidence of Flibusta availability)",
+    "seed": 20261026,
+    "selected_books": 30,
+    "planned_cases": 90,
+    "executed_cases": 90,
+    "top5_matches": 90,
+    "unresolved_availability": 0,
+    "source_unavailable": 0,
+    "replay_incomplete": 0,
+    "median_seconds": 0.0068,
+    "p95_seconds": 0.0171,
+    "warning": "No missing result establishes catalog absence. Live/replay metadata must be reviewed before declaring availability or absence."
+  },
+  "bounded_live": {
+    "mode": "live",
+    "seed": 20261026,
+    "selected_books": 30,
+    "planned_cases": 90,
+    "executed_cases": 3,
+    "top5_matches": 0,
+    "unresolved_availability": 0,
+    "source_unavailable": 3,
+    "median_seconds": 5.0033,
+    "p95_seconds": 5.0045,
+    "warning": "No missing result establishes catalog absence. Live/replay metadata must be reviewed before declaring availability or absence."
+  }
+}

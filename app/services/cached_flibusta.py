@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import logging
 import re
 from time import monotonic
@@ -15,9 +16,16 @@ from app.flibusta import (
     SeriesRef,
 )
 from app.repositories.cache import CacheRepository
+from app.services.search.context import search_status
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _StaleValue:
+    data: object
+    created_at: str
 
 
 class CachedFlibustaClient:
@@ -32,6 +40,7 @@ class CachedFlibustaClient:
         circuit_breaker_failures: int = 3,
         circuit_breaker_cooldown_seconds: float = 30,
         source_timeout_seconds: float = 25,
+        stale_refresh_timeout_seconds: float = 1,
     ) -> None:
         self.client = client
         self.repo = repo
@@ -41,6 +50,7 @@ class CachedFlibustaClient:
         self.circuit_breaker_failures = max(1, circuit_breaker_failures)
         self.circuit_breaker_cooldown_seconds = max(0.0, circuit_breaker_cooldown_seconds)
         self.source_timeout_seconds = max(0.05, source_timeout_seconds)
+        self.stale_refresh_timeout_seconds = max(0.05, stale_refresh_timeout_seconds)
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
         # Identical requests often arrive from Telegram and the web UI at the
@@ -134,10 +144,13 @@ class CachedFlibustaClient:
             except Exception:
                 logger.warning("cache read failed type=%s", cache_type, exc_info=True)
 
-        if self._circuit_is_open():
+        stale = None
+        if source_timeout_seconds is not None:
             stale = await self._stale(cache_key, cache_type, decode)
+        if self._circuit_is_open():
+            stale = stale or await self._stale(cache_key, cache_type, decode)
             if stale is not None:
-                return stale
+                return self._unwrap(stale)
             raise FlibustaError("Flibusta временно недоступна. Попробуй через минуту.")
 
         async def load_and_cache():
@@ -145,14 +158,15 @@ class CachedFlibustaClient:
                 if source_timeout_seconds is None:
                     value = await loader()
                 else:
-                    async with asyncio.timeout(source_timeout_seconds):
+                    refresh_timeout = min(source_timeout_seconds, self.stale_refresh_timeout_seconds) if stale is not None else source_timeout_seconds
+                    async with asyncio.timeout(refresh_timeout):
                         value = await loader()
             except Exception:
                 self._record_failure()
-                stale = await self._stale(cache_key, cache_type, decode)
-                if stale is not None:
+                fallback = stale or await self._stale(cache_key, cache_type, decode)
+                if fallback is not None:
                     logger.info("using stale cache after Flibusta failure type=%s", cache_type)
-                    return stale
+                    return fallback
                 raise
 
             self._record_success()
@@ -163,7 +177,18 @@ class CachedFlibustaClient:
                     logger.warning("cache write failed type=%s", cache_type, exc_info=True)
             return value
 
-        return await self._coalesced(cache_key, load_and_cache)
+        return self._unwrap(await self._coalesced(cache_key, load_and_cache))
+
+    @staticmethod
+    def _unwrap(value):
+        if isinstance(value, _StaleValue):
+            status = search_status.get()
+            if status is not None:
+                status.source_unavailable = True
+                if status.stale_at is None or value.created_at < status.stale_at:
+                    status.stale_at = value.created_at
+            return value.data
+        return value
 
     async def _coalesced(self, cache_key: str, loader):
         task = self._inflight.get(cache_key)
@@ -187,8 +212,8 @@ class CachedFlibustaClient:
         if not self.enabled or self.stale_if_error_seconds <= 0:
             return None
         try:
-            hit = await self.repo.get_stale(cache_key, self.stale_if_error_seconds)
-            return None if hit is None else decode(hit)
+            hit = await self.repo.get_stale_entry(cache_key, self.stale_if_error_seconds)
+            return None if hit is None else _StaleValue(decode(hit[0]), hit[1])
         except Exception:
             logger.warning("stale cache read failed type=%s", cache_type, exc_info=True)
             return None

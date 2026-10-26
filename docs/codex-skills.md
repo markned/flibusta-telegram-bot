@@ -182,3 +182,7 @@ setup явно вызываются; tickets только за пределам�
   sqlite-migration-safe. Во всех случаях без интервью, tickets и дополнительных агентов.
 - Ruff и make check: четыре исходные F821, воспроизведены на `git show HEAD:app/main.py`
   до изменений. Production исходники не менялись. Это известный blocker зелёного lint/CI.
+
+Follow-up: the search-improvement branch binds those four retry-lambda exception
+messages explicitly; its make lint/check pass without suppressing Ruff rules.
+The blocker above records the original skills-installation baseline.

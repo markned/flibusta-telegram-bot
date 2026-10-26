@@ -60,6 +60,7 @@ from app.services.kindle import KindleService
 from app.services.kindle_queue import KindleQueue
 from app.services.cached_flibusta import CachedFlibustaClient
 from app.services.intent_router import IntentKind, route_intent
+from app.services.search.types import outcome_notice
 from app.services.search import SearchMode, SearchService
 from app.middlewares.access import AccessMiddleware
 from app.state import (
@@ -512,7 +513,7 @@ async def show_book(callback: CallbackQuery) -> None:
             error=str(exc),
             duration=elapsed(started_at),
         )
-        await telegram_retry(lambda: callback.message.answer(str(exc)))
+        await telegram_retry(lambda text=str(exc): callback.message.answer(text))
         return
 
     log_user_action(
@@ -620,7 +621,7 @@ async def show_book_author_books(callback: CallbackQuery) -> None:
             error=str(exc),
             duration=elapsed(started_at),
         )
-        await telegram_retry(lambda: callback.message.answer(str(exc)))
+        await telegram_retry(lambda text=str(exc): callback.message.answer(text))
         return
 
     if not books:
@@ -799,7 +800,7 @@ async def show_author_books(callback: CallbackQuery) -> None:
             error=str(exc),
             duration=elapsed(started_at),
         )
-        await telegram_retry(lambda: callback.message.answer(str(exc)))
+        await telegram_retry(lambda text=str(exc): callback.message.answer(text))
         return
 
     if not books:
@@ -938,7 +939,7 @@ async def download_book(callback: CallbackQuery) -> None:
             error=str(exc),
             duration=elapsed(started_at),
         )
-        await telegram_retry(lambda: callback.message.answer(str(exc)))
+        await telegram_retry(lambda text=str(exc): callback.message.answer(text))
         await download_history_repo.add(user_id=callback.from_user.id,book_id=book_id,title=details.title if details else None,author=", ".join(details.authors) if details else None,format=fmt,filename=None,file_size_bytes=None,delivery_target="telegram",status="failed",error=str(exc))
         return
 
@@ -1038,7 +1039,10 @@ async def send_search_results(message: Message, query: str) -> None:
     if not outcome.books:
         await _send_no_results(message, query, progress=progress)
         return
-    session = _create_search_session(message.from_user.id, message.chat.id, query, outcome.books)
+    heading = "<b>Приблизительные совпадения</b>" if outcome.approximate else "<b>Нашёл книги</b>"
+    notice = escape(outcome_notice(outcome))
+    session = _create_search_session(message.from_user.id, message.chat.id, query, outcome.books,
+                                     title=f"{notice}\n\n{heading}" if notice else heading)
     log_user_action(message.from_user, message.chat.id, "search_ok", query=query, results=len(outcome.books), duration=elapsed(started_at))
     await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
 
@@ -1072,7 +1076,7 @@ async def send_author_title_results(message: Message, author: str, title: str) -
         message.chat.id,
         query,
         outcome.books,
-        title=f"<b>Нашёл книгу</b>\nЗапрос: <b>{escape(query)}</b>",
+        title=escape(outcome_notice(outcome)) + "\n" + ("<b>Приблизительные совпадения</b>" if outcome.approximate else "<b>Нашёл книгу</b>") + f"\nЗапрос: <b>{escape(query)}</b>",
     )
     await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
     return True
@@ -1141,11 +1145,16 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
         await _send_or_edit(message, progress, "Поиск занял слишком много времени. Flibusta сейчас отвечает медленно — попробуй ещё раз через минуту.")
         return False
 
+    notice = escape(outcome_notice(outcome))
+    notice = f"{notice}\n\n" if notice else ""
+    if outcome.source_unavailable and not outcome.books and not outcome.authors:
+        await _send_or_edit(message, progress, "Источник временно недоступен. Не удалось проверить наличие книги. Попробуй ещё раз.")
+        return False
     plan = outcome.plan
     if plan.format_hint:
         await _remember_preferred_format(message.from_user.id, plan.format_hint)
     if plan.mode == SearchMode.UNSUPPORTED_TOPIC:
-        await _send_or_edit(message, progress, "Я ищу по названию и автору. Напиши конкретную книгу, автора или их вместе.")
+        await _send_or_edit(message, progress, notice + "Я ищу по названию и автору. Напиши конкретную книгу, автора или их вместе.")
         return False
 
     books = outcome.books
@@ -1156,7 +1165,7 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
 
     if plan.mode == SearchMode.AUTHOR and authors:
         session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
-        await _send_or_edit(message, progress, _author_results_text(session), reply_markup=_author_results_keyboard(session))
+        await _send_or_edit(message, progress, notice + _author_results_text(session), reply_markup=_author_results_keyboard(session))
         return True
 
     if plan.mode == SearchMode.AUTHOR_TITLE and books:
@@ -1165,29 +1174,29 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
             message.chat.id,
             plan.original_query,
             books,
-            title=f"<b>Нашёл книгу</b>\nЗапрос: <b>{escape(plan.original_query)}</b>",
+            title=("<b>Приблизительные совпадения</b>" if outcome.approximate else "<b>Нашёл книгу</b>") + f"\nЗапрос: <b>{escape(plan.original_query)}</b>",
         )
-        await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
+        await _send_or_edit(message, progress, notice + _search_results_text(session), reply_markup=_search_results_keyboard(session))
         return True
 
     if books and authors and not top_book_is_exact and not top_author_is_exact:
         book_session = _create_search_session(message.from_user.id, message.chat.id, used_query, books)
         author_session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
-        await _send_or_edit(message, progress, _combined_results_text(used_query, books, authors), reply_markup=_combined_results_keyboard(book_session, author_session))
+        await _send_or_edit(message, progress, notice + _combined_results_text(used_query, books, authors), reply_markup=_combined_results_keyboard(book_session, author_session))
         return True
 
     if books:
-        title = None
+        title = "<b>Приблизительные совпадения</b>" if outcome.approximate else None
         if _norm(used_query) != _norm(plan.cleaned_query):
             title = f"Точного совпадения не нашёл. Ближайшее по запросу: <b>{escape(used_query)}</b>"
         session = _create_search_session(message.from_user.id, message.chat.id, used_query, books, title=title)
         log_user_action(message.from_user, message.chat.id, "smart_search_books", query=query, books=len(books), authors=len(authors), duration=elapsed(started_at))
-        await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
+        await _send_or_edit(message, progress, notice + _search_results_text(session), reply_markup=_search_results_keyboard(session))
         return True
 
     if authors:
         session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
-        await _send_or_edit(message, progress, f"Книг не нашёл, но нашёл авторов по запросу: <b>{escape(used_query)}</b>", reply_markup=_author_results_keyboard(session))
+        await _send_or_edit(message, progress, notice + f"Книг не нашёл, но нашёл авторов по запросу: <b>{escape(used_query)}</b>", reply_markup=_author_results_keyboard(session))
         return True
 
     if show_no_results:

@@ -87,3 +87,16 @@ Legacy AI/discovery variables are ignored for rolling-deploy safety and should b
 Project skills now live in `.agents/skills/`, optional agents in `.codex/agents/*.toml`.
 See `docs/codex-skills.md` for pinned upstreams, routing, validation and Cloud setup.
 These are development-only; production code and requirements are unchanged.
+
+## Search improvement stage
+
+- Search enforces title + author matching, preserves discovered authors, and keeps
+  eligible partial results when optional expansion hits the deadline.
+- Web results separate approximate matches, paginate beyond the initial display,
+  and run further variants only via an explicit expansion link. No JS dependency.
+- Expired eligible cache gets a one-second refresh budget, then dated stale results
+  on source failure. Search provenance is request-local, including coalesced reads.
+- Source failures retain the query/retry action and are not counted as normal misses.
+- Seeded 30-book/90-query benchmark and measurements: `docs/search-improvements.md`.
+  Offline synthetic coverage passes; live catalog verification is blocked by source
+  connectivity, not treated as catalog absence. No real download in validation.

@@ -114,7 +114,7 @@ FIRST_NAMES = {
 
 
 def route_intent(query: str) -> IntentDecision:
-    analysis = analyze_query(query)
+    analysis = analyze_query(query, max_words=24)
     cleaned = clean_query(analysis.cleaned or query)
     normalized = norm(cleaned)
     reasons: list[str] = []
@@ -209,19 +209,26 @@ def detect_author_title_query(query: str) -> tuple[str, str] | None:
     text = clean_query(query)
     words = text.split()
     lowered = [word.lower() for word in words]
-    if not 2 <= len(words) <= 6:
-        return None
-
     for separator in (" - ", " — ", " – ", ": "):
         if separator not in text:
             continue
-        left, right = text.split(separator, 1)
+        left, right = (part.strip() for part in text.split(separator, 1))
+        if not left or not right:
+            return None
+        if right.split()[-1].casefold() in KNOWN_SURNAMES:
+            return right, left
+        if _looks_explicit_author(left):
+            return left, right
         if _looks_surname(left.split()[-1].lower()):
             return left.strip(), right.strip()
         if _looks_surname(right.split()[-1].lower()):
             return right.strip(), left.strip()
         return None
 
+    if not 2 <= len(words) <= 6:
+        return None
+    if len(words) >= 3 and lowered[-2] in {"в", "с", "со", "на", "о", "об", "от", "для", "из", "к", "по", "без", "под"}:
+        return None
     if _looks_person_name_only(lowered):
         return None
     known = _known_author_at_edge(words, lowered)
@@ -232,6 +239,15 @@ def detect_author_title_query(query: str) -> tuple[str, str] | None:
     if lowered[0] in KNOWN_SURNAMES:
         return words[0], " ".join(words[1:])
     return None
+
+
+def _looks_explicit_author(text: str) -> bool:
+    parts = text.split()
+    return 2 <= len(parts) <= 3 and all(
+        part.casefold() not in {"и", "в", "на", "с", "со", "о", "об", "из", "для", "по", "без", "к"}
+        and re.fullmatch(r"[A-Za-zА-Яа-яЁё-]+", part)
+        for part in parts
+    )
 
 
 def _known_author_at_edge(words: list[str], lowered: list[str]) -> tuple[str, str] | None:
