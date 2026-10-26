@@ -20,6 +20,7 @@ from app.repositories.last_books import LastBooksRepository
 from app.repositories.reader_settings import ReaderSettingsRepository
 from app.repositories.web_access import WebAccessRepository
 from app.services.kindle import mask_email, sanitize_filename
+from app.services.search.types import outcome_notice
 from app.services.covers.download import CoverDownloadError, download_cover
 from app.web.device import detect_device
 from app.web import ui
@@ -235,13 +236,34 @@ async def _search(request: web.Request) -> web.Response:
             ui.search_page(query, [], [], error="Слишком много запросов. Подожди минуту."),
             status=429,
         )
-    outcome = await deps.search_service.search(query)
+    expanded = request.query.get("expand") == "1"
+    try:
+        page_number = max(0, min(100, int(request.query.get("page", "0"))))
+    except ValueError:
+        page_number = 0
+    try:
+        if expanded:
+            outcome = await deps.search_service.search(query, expanded=True)
+        else:
+            outcome = await deps.search_service.search(query)
+    except (FlibustaError, TimeoutError):
+        return _html(ui.search_page(
+            query, [], [], error="Источник временно недоступен. Не удалось проверить наличие книги.",
+            retry=True, expanded=expanded,
+        ), status=503)
     error = None
     if outcome.plan.mode.value == "unsupported_topic":
         error = "Поиск работает по названию книги, автору или их сочетанию."
-    elif not outcome.books and not outcome.authors and deps.search_stats_repo is not None:
+    elif not outcome.books and not outcome.authors and not outcome.source_unavailable and deps.search_stats_repo is not None:
         await deps.search_stats_repo.record_miss(query)
-    return _html(ui.search_page(query, outcome.books, outcome.authors, error=error))
+    if outcome.source_unavailable and not outcome.books and not outcome.authors:
+        error = "Источник временно недоступен. Не удалось проверить наличие книги."
+    return _html(ui.search_page(
+        query, outcome.books, outcome.authors, error=error,
+        notice=outcome_notice(outcome), match_query=outcome.plan.title or outcome.plan.cleaned_query,
+        has_more=outcome.has_more, retry=outcome.source_unavailable or outcome.partial,
+        expanded=expanded, page_number=page_number,
+    ), status=503 if error and outcome.source_unavailable else 200)
 
 
 async def _author(request: web.Request) -> web.Response:

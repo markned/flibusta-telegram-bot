@@ -23,18 +23,22 @@ class CacheRepository:
         except json.JSONDecodeError: return None
 
     async def get_stale(self, key: str, max_stale_seconds: int) -> Any | None:
+        entry = await self.get_stale_entry(key, max_stale_seconds)
+        return None if entry is None else entry[0]
+
+    async def get_stale_entry(self, key: str, max_stale_seconds: int) -> tuple[Any, str] | None:
         cutoff = _now() - timedelta(seconds=max(0, max_stale_seconds))
         async with self.db.connect() as c:
             row = await (
                 await c.execute(
-                    'SELECT payload_json, expires_at FROM flibusta_cache WHERE cache_key=?',
+                    'SELECT payload_json, expires_at, created_at FROM flibusta_cache WHERE cache_key=?',
                     (key,),
                 )
             ).fetchone()
         if row is None or datetime.fromisoformat(row['expires_at']) < cutoff:
             return None
         try:
-            return json.loads(row['payload_json'])
+            return json.loads(row['payload_json']), row['created_at']
         except json.JSONDecodeError:
             return None
 

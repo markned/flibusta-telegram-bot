@@ -33,3 +33,20 @@ class SearchOutcome:
     authors: list[AuthorResult]
     used_queries: tuple[str, ...]
 
+
+    approximate: bool = False
+    partial: bool = False
+    source_unavailable: bool = False
+    stale_at: str | None = None
+    has_more: bool = False
+
+
+def outcome_notice(outcome: SearchOutcome) -> str:
+    """Plain text shared by web/Telegram; no raw upstream messages or secrets."""
+    if outcome.stale_at:
+        from datetime import datetime
+        date = datetime.fromisoformat(outcome.stale_at).strftime("%d.%m.%Y %H:%M UTC")
+        return f"Результаты из кэша от {date}. Источник временно недоступен."
+    if outcome.source_unavailable or outcome.partial:
+        return "Источник временно недоступен. Показаны доступные результаты; поиск мог завершиться не полностью."
+    return ""

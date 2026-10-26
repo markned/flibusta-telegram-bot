@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from html import escape
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
+
+from app.services.search.service import title_matches
 
 from app.flibusta import AuthorResult, BookDetails, SearchResult
 from app.branding import BRAND_NAME
@@ -99,21 +101,51 @@ def search_page(
     authors: list[AuthorResult],
     *,
     error: str | None = None,
+    notice: str = "",
+    match_query: str | None = None,
+    has_more: bool = False,
+    retry: bool = False,
+    expanded: bool = False,
+    page_number: int = 0,
 ) -> str:
+    def search_link(label, **options):
+        params = {"q": query, "expand": "1" if expanded else "0", **options}
+        return f'<p><a class="button" href="/search?{escape(urlencode(params), quote=True)}">{escape(label)}</a></p>'
+
+    pages = max(1, (len(books) + 19) // 20, (len(authors) + 11) // 12)
+    page_number = min(max(0, page_number), pages - 1)
+    content = f'<div class="notice">{escape(notice)}</div>' if notice else ""
     if error:
-        content = f'<div class="notice">{escape(error)}</div>'
+        content += f'<div class="notice">{escape(error)}</div>'
     elif not books and not authors:
-        content = "<p>Ничего не нашлось. Попробуй сократить запрос.</p>"
+        content += "<p>Ничего не нашлось. Попробуй сократить запрос.</p>"
     else:
-        content = ""
-        if books:
-            content += "<h2>Книги</h2>" + book_list(books[:20])
+        shown = books[page_number * 20:(page_number + 1) * 20]
+        matches = [book for book in shown if title_matches(match_query or query, book.title)]
+        approximate = [book for book in shown if book not in matches]
+        if matches:
+            content += "<h2>Книги</h2>" + book_list(matches)
+        if approximate:
+            content += "<h2>Приблизительные совпадения</h2>" + book_list(approximate)
         if authors:
-            content += "<h2>Авторы</h2>" + author_list(authors[:12])
+            content += "<h2>Авторы</h2>" + author_list(authors[page_number * 12:(page_number + 1) * 12])
+    if pages > 1:
+        content += f'<p class="muted">Страница {page_number + 1} из {pages}</p>'
+    if page_number > 0:
+        content += search_link("← Назад", page=page_number - 1)
+    if page_number + 1 < pages:
+        content += search_link("Дальше →", page=page_number + 1)
+    if has_more and not expanded:
+        content += search_link("Искать дополнительные варианты", expand="1")
+    if retry:
+        content += search_link("Повторить поиск")
     return page(
         f"Поиск: {query}",
         "<h2>Результаты поиска</h2>"
         f"<p>Запрос: <b>{escape(query)}</b></p>{content}"
+        '<form method="get" action="/search">'
+        f'<input name="q" type="search" value="{escape(query, quote=True)}" required>'
+        '<p><button type="submit">Изменить запрос</button></p></form>'
         '<p><a class="button" href="/">Новый поиск</a></p>',
         authenticated=True,
     )
