@@ -12,7 +12,7 @@
 
 - Natural text uses one deterministic `SearchService`.
 - Supported search intents: exact title, author, author+title, and safe fallback.
-- Broad genre/recommendation phrases are not searched literally; the user is asked for a title or author.
+- Broad semantic recommendation phrases are not searched literally; users can browse source-backed weekly popularity and community recommendations by genre.
 - AI assistant, OpenAI planning, Tavily discovery, recommendation packs, pending confirmations, and literary provider scaffolding have been removed.
 - Flibusta remains the only catalog source.
 - A lightweight aiohttp web shell reuses the same search, cache, SQLite, favorites, history and reader delivery services.
@@ -34,13 +34,21 @@
 - At most `SEARCH_FALLBACK_MAX_QUERIES` (production default 3) safe variants.
 - Case-insensitive author/title matching.
 - One keyboard-layout correction for Latin input.
-- Book search runs first; author search is only used when no book was found.
+- Natural queries use bounded parallel catalog-author probes and book metadata; explicit/known authors retain sticky author intent. Ambiguous author/title queries ask for confirmation.
 - Empty responses are not cached.
 - Duplicate editions are collapsed by normalized title + author and clean editions are ranked first.
 - A failed primary query no longer prevents the remaining bounded fallback queries from running.
 - Fresh SQLite cache is preferred; recent stale data can be used only when Flibusta fails.
 - A small in-memory circuit breaker prevents repeated failing calls.
 - Polite search prefixes are stripped deterministically; no-result telemetry is stored only as daily aggregates without query text.
+
+## Catalog browsing
+
+- Telegram `/popular`, `/genres` and menu buttons; web `/browse` and genre selector.
+- Weekly source ranking by downloads, not an all-time or invented popularity score.
+- Genres use source community recommendations; no AI scheduler or full catalog mirror.
+- Lazy SQLite caches, bounded lists, existing access/rate limits.
+- Details and limitations: `docs/catalog-search.md`.
 
 ## Production configuration additions
 

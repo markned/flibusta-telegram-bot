@@ -269,6 +269,57 @@ async def start(message: Message, command: CommandObject) -> None:
     await send_home(message)
 
 
+@router.message(Command("popular", "genres"))
+async def browse_command(message: Message) -> None:
+    await send_catalog_browse(message, genres_only=message.text.split()[0].split("@")[0] == "/genres")
+
+
+@router.callback_query(F.data.startswith("browse:"))
+async def browse_callback(callback: CallbackQuery) -> None:
+    await callback_answer(callback)
+    message = callback.message.model_copy(update={"from_user": callback.from_user})
+    value = callback.data.split(":", 1)[1]
+    if value.startswith("genres-"):
+        try:
+            page_number = min(24, max(0, int(value.removeprefix("genres-"))))
+        except ValueError:
+            return
+        await send_catalog_browse(message, genres_only=True, page_number=page_number)
+    else:
+        await send_catalog_browse(message, genre=None if value in {"week", "genres"} else value,
+                                  genres_only=value == "genres")
+
+
+async def send_catalog_browse(message: Message, genre=None, *, genres_only=False, page_number=0) -> None:
+    from app.services.catalog_browse import browse_catalog, freshness_notice
+    if not _allow_search(message.from_user.id):
+        await message.answer("Слишком много запросов. Подожди минуту.")
+        return
+    try:
+        title, books, genres, status = await browse_catalog(flibusta, genre, genres_only=genres_only)
+    except (FlibustaError, TimeoutError, ValueError):
+        await message.answer("Подборка сейчас недоступна. Попробуй позже.")
+        return
+    if genres:
+        page_size = 16
+        page_number = min(page_number, (len(genres) - 1) // page_size)
+        kb = InlineKeyboardBuilder()
+        for item in genres[page_number * page_size:(page_number + 1) * page_size]:
+            kb.row(InlineKeyboardButton(text=item["name"][:64], callback_data=f"browse:{item['code']}"))
+        if page_number:
+            kb.row(InlineKeyboardButton(text="← Назад", callback_data=f"browse:genres-{page_number - 1}"))
+        if (page_number + 1) * page_size < len(genres):
+            kb.row(InlineKeyboardButton(text="Дальше →", callback_data=f"browse:genres-{page_number + 1}"))
+        await message.answer("<b>Жанры Flibusta</b>\nРекомендации сообщества по жанру.", reply_markup=kb.as_markup())
+        return
+    if not books:
+        await message.answer("Источник не вернул подборку. Попробуй позже.")
+        return
+    session = _create_search_session(message.from_user.id, message.chat.id, title, books,
+                                     title=escape(title) + "\n" + escape(freshness_notice(status)))
+    await message.answer(_search_results_text(session), reply_markup=_search_results_keyboard(session))
+
+
 @router.message(Command("help"))
 async def help_command(message: Message) -> None:
     await send_help(message)
@@ -471,6 +522,9 @@ async def search_text(message: Message) -> None:
     if text.startswith("/"):
         return
 
+    if text in {"🔥 Популярное", "📖 Жанры"}:
+        await send_catalog_browse(message, genres_only=text == "📖 Жанры")
+        return
     if text == FAVORITES_BUTTON:
         await favorites_command(message); return
     if text == HISTORY_BUTTON:
@@ -1182,6 +1236,16 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
         await _remember_preferred_format(message.from_user.id, plan.format_hint)
     if plan.mode == SearchMode.UNSUPPORTED_TOPIC:
         await _send_or_edit(message, progress, notice + "Я ищу по названию и автору. Напиши конкретную книгу, автора или их вместе.")
+        return False
+
+    if outcome.query_choices or (outcome.suggested_query and plan.mode != SearchMode.AUTHOR):
+        choices = outcome.query_choices or (outcome.suggested_query,)
+        kb = InlineKeyboardBuilder()
+        for choice in choices[:4]:
+            session = _create_search_session(message.from_user.id, message.chat.id, choice, [])
+            kb.row(InlineKeyboardButton(text=choice[:64], callback_data=f"authorfix:{session.session_id}"))
+        text = outcome.clarification or "Вы имели в виду:"
+        await _send_or_edit(message, progress, notice + escape(text), reply_markup=kb.as_markup())
         return False
 
     books = outcome.books

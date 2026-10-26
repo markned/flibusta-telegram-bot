@@ -21,6 +21,7 @@ from app.repositories.reader_settings import ReaderSettingsRepository
 from app.repositories.web_access import WebAccessRepository
 from app.services.kindle import mask_email, sanitize_filename
 from app.services.search.types import outcome_notice
+from app.services.catalog_browse import browse_catalog, freshness_notice
 from app.services.covers.download import CoverDownloadError, download_cover
 from app.web.device import detect_device
 from app.web import ui
@@ -104,6 +105,7 @@ def build_web_app(deps: WebDependencies) -> web.Application:
     app.router.add_post("/pair", _pair)
     app.router.add_post("/logout", _logout)
     app.router.add_get("/search", _search)
+    app.router.add_get("/browse", _browse)
     app.router.add_get("/author/{author_id}", _author)
     app.router.add_get("/series/{series_id}", _series)
     app.router.add_get("/book/{book_id}", _book)
@@ -267,7 +269,22 @@ async def _search(request: web.Request) -> web.Response:
         expanded=expanded, page_number=page_number,
         author_query=(outcome.plan.author or outcome.plan.cleaned_query) if outcome.plan.mode.value == "author" else None,
         suggested_query=outcome.suggested_query, about_author=outcome.about_author,
+        query_choices=outcome.query_choices, clarification=outcome.clarification,
     ), status=503 if error and outcome.source_unavailable else 200)
+
+
+async def _browse(request: web.Request) -> web.Response:
+    deps: WebDependencies = request.app[DEPS_KEY]
+    if not request.app[SEARCH_LIMITER_KEY].allow(str(request["user_id"])):
+        raise web.HTTPTooManyRequests(text="Слишком много запросов. Подожди минуту.")
+    try:
+        page_number = min(20, max(0, int(request.query.get("page", "0"))))
+        title, books, genres, status = await browse_catalog(
+            deps.flibusta, request.query.get("genre"), genres_only=request.query.get("view") == "genres")
+    except ValueError:
+        raise web.HTTPBadRequest(text="Неизвестный жанр или страница.")
+    return _html(ui.browse_page(title, books, genres, page_number=page_number,
+                               genre=request.query.get("genre"), notice=freshness_notice(status)))
 
 
 async def _author(request: web.Request) -> web.Response:

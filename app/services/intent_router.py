@@ -36,6 +36,9 @@ BROAD_QUERY_PATTERNS = (
     r"\bпорекомендуй\w*",
     r"\bчто\s+почитать",
     r"\bхочу\s+почитать",
+    r"\bинтересн\w*\s+(?:о|об|про)\b",
+    r"\b(?:что нибудь|что то|какое нибудь)\b",
+    r"\bпокороче\b",
     r"\bчто-то\s+похож",
     r"\bпохож\w*\s+на",
     r"\bв\s+духе",
@@ -228,7 +231,7 @@ def detect_author_title_query(query: str) -> tuple[str, str] | None:
     known = _known_author_at_edge(words, lowered)
     if known:
         return known
-    if _looks_surname(lowered[-1]):
+    if lowered[-1] in (KNOWN_SURNAMES | known_surnames()):
         return words[-1], " ".join(words[:-1])
     if lowered[0] in KNOWN_SURNAMES:
         return words[0], " ".join(words[1:])

@@ -36,7 +36,14 @@ def build_search_plan(query: str, *, max_fallback_queries: int = 2) -> SearchPla
         if len(words) >= 2 and words[0].casefold() in {"книга", "книгу", "роман", "повесть"}:
             fallback.append(" ".join(words[1:]))
         if len(words) >= 4:
-            fallback.extend((" ".join(words[:-1]), " ".join(words[1:])))
+            fallback.extend((" ".join(words[:-1]), " ".join(words[-2:]), " ".join(words[:2])))
+        elif len(words) >= 2:
+            fallback.extend((words[-1], words[0]))
+        elif len(words) == 1 and len(words[0]) >= 4:
+            word = words[0]
+            for index in (len(word) - 2, 1, 0):
+                if 0 <= index < len(word) - 1:
+                    fallback.append(word[:index] + word[index + 1] + word[index] + word[index + 2:])
     fallback = _dedupe(fallback)[: max(0, max_fallback_queries)]
 
     return SearchPlan(
@@ -48,6 +55,7 @@ def build_search_plan(query: str, *, max_fallback_queries: int = 2) -> SearchPla
         author=decision.author_part,
         title=decision.title_part,
         format_hint=decision.format_hint,
+        catalog_lookup="quoted_title" not in decision.reasons and mode in {SearchMode.EXACT, SearchMode.FALLBACK},
     )
 
 

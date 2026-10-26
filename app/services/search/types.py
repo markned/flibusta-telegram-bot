@@ -24,6 +24,7 @@ class SearchPlan:
     author: str | None = None
     title: str | None = None
     format_hint: str | None = None
+    catalog_lookup: bool = False
 
 
 @dataclass(frozen=True)
@@ -41,6 +42,8 @@ class SearchOutcome:
     has_more: bool = False
     suggested_query: str | None = None
     about_author: bool = False
+    query_choices: tuple[str, ...] = ()
+    clarification: str | None = None
 
 
 def outcome_notice(outcome: SearchOutcome) -> str:

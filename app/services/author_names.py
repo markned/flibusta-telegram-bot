@@ -83,6 +83,25 @@ def known_surnames() -> set[str]:
     return {norm(parts[-1]) for parts in KNOWN_AUTHOR_NAMES}
 
 
+def name_word_matches(expected: str, actual: str) -> bool:
+    """One-way inflections of a catalog token, never arbitrary prefix stemming."""
+    expected = name_tokens(expected)
+    actual = name_tokens(actual)
+    if len(expected) != 1 or len(actual) != 1:
+        return False
+    wanted, word = expected[0], actual[0]
+    forms = {word, _genitive(word, surname=True), _genitive(word)}
+    if word.endswith(("ский", "цкий", "ой")):
+        forms.update(word[:-2] + ending for ending in ("ого", "ому", "ым", "ом"))
+    elif word.endswith("а"):
+        forms.update(word[:-1] + ending for ending in ("ы", "и", "е", "у", "ой"))
+    elif word.endswith("я"):
+        forms.update(word[:-1] + ending for ending in ("и", "е", "ю", "ей"))
+    elif word[-1:] not in "аеёиоуыэюяьй":
+        forms.update(word + ending for ending in ("а", "у", "ом", "е"))
+    return wanted in forms
+
+
 def names_match(expected: str, actual: str) -> bool:
     wanted = set(name_tokens(expected))
     if not wanted:
@@ -103,7 +122,13 @@ def names_match(expected: str, actual: str) -> bool:
         actual_middle = patronymics(available)
         if expected_middle and actual_middle and expected_middle != actual_middle:
             continue
-        if wanted - expected_middle <= available - actual_middle:
+        remaining = list(available - actual_middle)
+        for word in wanted - expected_middle:
+            found = next((i for i, actual_word in enumerate(remaining) if name_word_matches(word, actual_word)), None)
+            if found is None:
+                break
+            remaining.pop(found)
+        else:
             return True
     return False
 
@@ -111,7 +136,7 @@ def names_match(expected: str, actual: str) -> bool:
 def one_edit_apart(left: str, right: str) -> bool:
     if (
         left == right
-        or min(len(left), len(right)) < 4
+        or min(len(left), len(right)) < 3
         or abs(len(left) - len(right)) > 1
     ):
         return False

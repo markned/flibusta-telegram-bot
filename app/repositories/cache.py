@@ -51,6 +51,25 @@ class CacheRepository:
              (key, cache_type, encoded, created.isoformat(), expires.isoformat()))
             await c.commit()
 
+    async def recent_catalog_metadata(self) -> list[tuple[str, Any]]:
+        # Inspect a fixed rowid window, not a scan of the entire cache. Decode
+        # only fresh, small catalog batches; never book details or private data.
+        async with self.db.connect() as conn:
+            rows = await (await conn.execute(
+                """SELECT cache_type, payload_json FROM flibusta_cache
+                   WHERE rowid IN (SELECT rowid FROM flibusta_cache ORDER BY rowid DESC LIMIT 128)
+                     AND cache_type IN ('book_search','author_search','author_books')
+                     AND expires_at > ? AND length(CAST(payload_json AS BLOB)) <= 32768
+                   ORDER BY rowid DESC LIMIT 16""", (_now().isoformat(),)
+            )).fetchall()
+        result = []
+        for row in rows:
+            try:
+                result.append((row["cache_type"], json.loads(row["payload_json"])))
+            except json.JSONDecodeError:
+                continue
+        return result
+
     async def stats(self) -> tuple[int, dict[str, int], int]:
         now = _now().isoformat()
         async with self.db.connect() as c:
