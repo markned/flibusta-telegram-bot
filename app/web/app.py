@@ -7,7 +7,7 @@ import logging
 import re
 from time import monotonic
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from aiohttp import web
 
@@ -21,7 +21,8 @@ from app.repositories.reader_settings import ReaderSettingsRepository
 from app.repositories.web_access import WebAccessRepository
 from app.services.kindle import mask_email, sanitize_filename
 from app.services.search.types import outcome_notice
-from app.services.catalog_browse import browse_catalog, freshness_notice
+from app.services.catalog_browse import browse_catalog
+from app.services.popular_collections import SOURCES
 from app.services.covers.download import CoverDownloadError, download_cover
 from app.web.device import detect_device
 from app.web import ui
@@ -56,6 +57,7 @@ class WebDependencies:
     cover_download_max_bytes: int = 3 * 1024 * 1024
     cover_download_timeout_seconds: float = 6
     search_stats_repo: Any | None = None
+    popular_collections: Any | None = None
 
 
 class PairRateLimiter:
@@ -278,13 +280,32 @@ async def _browse(request: web.Request) -> web.Response:
     if not request.app[SEARCH_LIMITER_KEY].allow(str(request["user_id"])):
         raise web.HTTPTooManyRequests(text="Слишком много запросов. Подожди минуту.")
     try:
-        page_number = min(20, max(0, int(request.query.get("page", "0"))))
-        title, books, genres, status = await browse_catalog(
-            deps.flibusta, request.query.get("genre"), genres_only=request.query.get("view") == "genres")
+        page_number = min(50, max(0, int(request.query.get("page", "0"))))
+        source = request.query.get("source")
+        view = request.query.get("view", "tops")
+        genre = request.query.get("genre")
+        group = request.query.get("group")
+        if view == "random":
+            book = await deps.popular_collections.random_book(request.query.get("exclude")) if deps.popular_collections else None
+            if book:
+                raise web.HTTPSeeOther(f"/book/{book.book_id}?collection=random")
+            return _html(ui.browse_page("Случайная книга", [], [], view="random"))
+        if genre:
+            title, books, _, _ = await browse_catalog(deps.flibusta,genre)
+            genres=[]
+        elif view == "genres":
+            title, books, genres = "Жанры", [], await deps.flibusta.genres()
+        elif source:
+            if source not in SOURCES: raise ValueError("Unknown source")
+            title = SOURCES[source]
+            books = await deps.popular_collections.books(source) if deps.popular_collections else await deps.flibusta.popular_books() if source == "flibusta" else []
+            genres=[]
+        else:
+            title,books,genres = "Популярное",[],[]
     except ValueError:
-        raise web.HTTPBadRequest(text="Неизвестный жанр или страница.")
-    return _html(ui.browse_page(title, books, genres, page_number=page_number,
-                               genre=request.query.get("genre"), notice=freshness_notice(status)))
+        raise web.HTTPBadRequest(text="Неизвестный раздел или страница.")
+    return _html(ui.browse_page(title,books,genres,page_number=page_number,genre=genre,
+                               source=source,view=view,group=group))
 
 
 async def _author(request: web.Request) -> web.Response:
@@ -299,6 +320,20 @@ async def _series(request: web.Request) -> web.Response:
     series_id = _catalog_id(request.match_info["series_id"])
     name, books = await deps.flibusta.series_books(series_id, limit=80)
     return _html(ui.simple_books_page(f"Серия: {name}", books, "Книги серии не найдены."))
+
+
+def _collection_return(request):
+    source = request.query.get("collection")
+    genre = request.query.get("genre")
+    if source == "random": return "/"
+    if source not in SOURCES and not genre: return None
+    try:
+        page = max(0,min(50,int(request.query.get("collection_page","0"))))
+    except ValueError: page=0
+    params={"page":page}
+    if source in SOURCES: params["source"]=source
+    if genre and re.fullmatch(r"[a-z0-9_]{1,48}",genre): params["genre"]=genre
+    return "/browse?"+urlencode(params)
 
 
 async def _book(request: web.Request) -> web.Response:
@@ -338,6 +373,8 @@ async def _book(request: web.Request) -> web.Response:
             pocketbook_configured=bool(pocketbook and pocketbook.enabled),
             notice=request.query.get("notice"),
             cover_url=cover_url,
+            return_url=_collection_return(request),
+            random_next=f"/browse?view=random&exclude={details.book_id}" if request.query.get("collection") == "random" else None,
         )
     )
 

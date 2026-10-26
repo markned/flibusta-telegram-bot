@@ -14,7 +14,7 @@
 - Supported search intents: exact title, author, author+title, and safe fallback.
 - Broad semantic recommendation phrases are not searched literally; users can browse source-backed weekly popularity and community recommendations by genre.
 - AI assistant, OpenAI planning, Tavily discovery, recommendation packs, pending confirmations, and literary provider scaffolding have been removed.
-- Flibusta remains the only catalog source.
+- Flibusta remains the only source of catalog book IDs, details and files. Yandex Books and Litres public rankings supply title/author metadata only.
 - A lightweight aiohttp web shell reuses the same search, cache, SQLite, favorites, history and reader delivery services.
 - Web users pair through a one-time Telegram code; only HMAC hashes of codes and sessions are stored.
 - Kindle and PocketBook are detected from `User-Agent`; their book cards hide downloads and expose only the matching configured delivery action. Reliable covers are served through the local `/cover/{book_id}` proxy.
@@ -44,10 +44,12 @@
 
 ## Catalog browsing
 
-- Telegram `/popular`, `/genres` and menu buttons; web `/browse` and genre selector.
+- Telegram persistent menu: Моя полка / Каталог; source tops, grouped genres and random book inside. Commands `/popular`, `/genres`, `/random`; web `/browse` mirrors these.
 - Weekly source ranking by downloads, not an all-time or invented popularity score.
 - Genres use source community recommendations; no AI scheduler or full catalog mirror.
-- Lazy SQLite caches, bounded lists, existing access/rate limits.
+- Ready source-ranked SQLite snapshots; one cancellable sequential worker refreshes daily at 06:00 Europe/Belgrade (initial fill when snapshots are missing/stale). No external lookup when opening a saved top.
+- Genre groups/subgenres and source books paginate by 8; collection cards retain owner/chat-bound return to the same page. Random selection uses existing snapshots, never scans catalog.
+- Existing access/rate limits, bounded lists and HTTP pools remain; no new production dependencies.
 - Details and limitations: `docs/catalog-search.md`.
 
 ## Production configuration additions

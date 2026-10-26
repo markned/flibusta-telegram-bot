@@ -295,7 +295,7 @@ def test_send_search_results_sends_message(monkeypatch):
     assert any("Нашёл книги" in text for text, _ in message.answers + message.edit_payloads)
     progress_markup = message.answers[0][1]["reply_markup"]
     progress_labels = [button.text for row in progress_markup.keyboard for button in row]
-    assert "📱 Мои устройства" in progress_labels and "⚙️ Kindle" not in progress_labels
+    assert progress_labels == ["📚 Моя полка", "🔎 Каталог"]
 
 
 def test_text_routing_uses_single_search_entrypoint(monkeypatch):
@@ -431,7 +431,7 @@ def test_home_uses_one_persistent_menu_without_inline_duplicates(monkeypatch):
     assert len(message.answers) == 1
     markup = message.answers[0][1]["reply_markup"]
     labels = [button.text for row in markup.keyboard for button in row]
-    assert labels == ["⭐ Избранное", "🕘 История", "📚 Последняя", "📱 Мои устройства", "🔥 Популярное", "📖 Жанры", "❓ Помощь"]
+    assert labels == ["📚 Моя полка", "🔎 Каталог"]
     assert not hasattr(markup, "inline_keyboard")
 
 
@@ -822,18 +822,63 @@ def test_telegram_genre_pages_and_weekly_book_session(monkeypatch):
     import app.main as main
     class Catalog:
         async def genres(self):
-            return [{'code': f'g{i}', 'name': f'Жанр {i}'} for i in range(35)]
+            return [{'code': f'g{i}', 'name': f'Жанр {i:02}', 'group':'Фантастика'} for i in range(35)]
         async def popular_books(self):
             return [SearchResult('640151', '1984', 'Джордж Оруэлл')]
     monkeypatch.setattr(main, 'flibusta', Catalog())
+    class Collections:
+        async def books(self, source): return await Catalog().popular_books()
+    monkeypatch.setattr(main, 'popular_collections', Collections())
     main.search_timestamps.clear()
     message = _FakeMessage()
-    run(main.send_catalog_browse(message, genres_only=True, page_number=1))
+    from app.ui.catalog import group_key
+    run(main.send_catalog_browse(message, action=f"group:{group_key('Фантастика и фэнтези')}:1"))
     buttons = [b for row in message.answers[-1][1]['reply_markup'].inline_keyboard for b in row]
-    assert buttons[0].callback_data == 'browse:g16'
-    assert buttons[-1].callback_data == 'browse:genres-2'
-    assert len(buttons) == 18
+    assert buttons[0].callback_data == 'browse:genre:g8'
+    assert any(b.text == 'Дальше →' for b in buttons)
+    assert len(buttons) == 12
     run(main.send_catalog_browse(message))
     text, payload = message.answers[-1]
-    assert '7 дней' in text
-    assert any(b.callback_data == 'book:640151' for row in payload['reply_markup'].inline_keyboard for b in row)
+    assert text == 'Flibusta'
+    assert any(b.callback_data.startswith('cbook:') and b.callback_data.endswith(':640151') for row in payload['reply_markup'].inline_keyboard for b in row)
+
+
+def test_collection_card_returns_to_same_page_and_rejects_other_user(monkeypatch):
+    from dataclasses import replace
+    from unittest.mock import AsyncMock
+    import app.main as main
+    session=main._create_search_session(501,777,'Литрес',[SearchResult(str(i),'Book','Author') for i in range(20)],title='Литрес',return_to='browse:tops')
+    session=replace(session,page=1)
+    main.search_sessions[session.session_id]=session
+    details=_book_details_for_card()
+    source=type('Catalog',(),{'details':AsyncMock(return_value=details)})()
+    monkeypatch.setattr(main,'flibusta',source)
+    monkeypatch.setattr(main,'_preferred_format',AsyncMock(return_value=None))
+    monkeypatch.setattr(main,'last_books_repo',type('Last',(),{'upsert':AsyncMock()})())
+    monkeypatch.setattr(main,'favorites_repo',type('Fav',(),{'exists':AsyncMock(return_value=False)})())
+    wrong=_FakeCallback(f'cbook:{session.session_id}:8',user_id=999)
+    run(main.show_book(wrong))
+    assert source.details.await_count == 0 and wrong.answers
+    own=_FakeCallback(f'cbook:{session.session_id}:8')
+    run(main.show_book(own))
+    assert not own.message.answers and own.message.edit_payloads
+    buttons=[b for row in own.message.edit_payloads[-1][1]['reply_markup'].inline_keyboard for b in row]
+    back=next(b for b in buttons if b.text=='← В подборку')
+    assert back.callback_data==f'page:{session.session_id}:1'
+    returning=_FakeCallback(back.callback_data)
+    run(main.paginate_search(returning))
+    assert main.search_sessions[session.session_id].return_to == 'browse:tops'
+    assert main.search_sessions[session.session_id].page == 1
+    assert not returning.message.answers and returning.message.edit_payloads
+
+
+def test_shelf_sections_replace_the_menu_message(monkeypatch):
+    from unittest.mock import AsyncMock
+    import app.main as main
+    monkeypatch.setattr(main,'favorites_repo',type('Fav',(),{'list':AsyncMock(return_value=[]),'count':AsyncMock(return_value=0)})())
+    monkeypatch.setattr(main,'download_history_repo',type('History',(),{'recent':AsyncMock(return_value=[])})())
+    monkeypatch.setattr(main,'last_books_repo',type('Last',(),{'get':AsyncMock(return_value=None)})())
+    for handler in (main.home_favorites,main.home_history,main.home_last):
+        callback=_FakeCallback('home')
+        run(handler(callback))
+        assert callback.message.edit_payloads and not callback.message.answers

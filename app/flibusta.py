@@ -119,6 +119,9 @@ class FlibustaClient:
             name = link.get_text(" ", strip=True)
             if re.fullmatch(r"[a-z0-9_]{1,48}", code) and name:
                 result[code] = {"code": code, "name": name[:120]}
+                heading = link.find_previous("h3")
+                if heading and heading.find_parent(id="main") is not None:
+                    result[code]["group"] = heading.get_text(" ", strip=True)[:120]
             if len(result) >= 400:
                 break
         return list(result.values())

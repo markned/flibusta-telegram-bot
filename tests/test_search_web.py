@@ -188,22 +188,25 @@ def test_authenticated_browsing_paginates_and_validates_genres(tmp_path):
         async def popular_books(self):
             return [SearchResult(str(i), f'Book {i}', 'Author') for i in range(42)]
         async def genres(self):
-            return [{'code': 'detective', 'name': 'Детективы'}]
+            return [{'code': 'detective', 'name': 'Детективы', 'group':'Детективы и триллеры'}]
         async def genre_books(self, code):
             assert code == 'detective'
             return [SearchResult('50', 'Детектив', 'Автор')]
     async def scenario():
         async with browser(tmp_path, object(), Catalog()) as client:
-            response = await client.get('/browse')
+            root = await (await client.get('/browse')).text()
+            assert 'Яндекс Книги' in root and 'Литрес' in root
+            response = await client.get('/browse?source=flibusta')
             soup = BeautifulSoup(await response.text(), 'html.parser')
             assert response.status == 200
-            assert '7 дней' in soup.get_text()
-            assert soup.find('a', href='/book/19') and not soup.find('a', href='/book/20')
+            assert 'Flibusta' in soup.get_text()
+            assert soup.find('a', href=lambda h:h and h.startswith('/book/7?'))
+            assert not soup.find('a', href=lambda h:h and h.startswith('/book/8?'))
             next_page = soup.find('a', string='Дальше →')
             second = await (await client.get(next_page['href'])).text()
-            assert '/book/20' in second
+            assert '/book/8?' in second
             genres = await (await client.get('/browse?view=genres')).text()
-            assert '<select name="genre">' in genres and 'Детективы' in genres
+            assert 'group=' in genres and 'Детективы' in genres
             result = await client.get('/browse?genre=detective')
             assert '/book/50' in await result.text()
             assert (await client.get('/browse?genre=missing')).status == 400
@@ -211,3 +214,11 @@ def test_authenticated_browsing_paginates_and_validates_genres(tmp_path):
             unauthenticated = await client.get('/browse', allow_redirects=False)
             assert unauthenticated.status == 303
     asyncio.run(scenario())
+
+
+def test_collection_return_url_preserves_page_and_cannot_redirect_offsite():
+    from types import SimpleNamespace
+    from app.web.app import _collection_return
+    assert _collection_return(SimpleNamespace(query={'collection':'litres','collection_page':'3'})) == '/browse?page=3&source=litres'
+    assert _collection_return(SimpleNamespace(query={'collection':'https://evil.test'})) is None
+    assert _collection_return(SimpleNamespace(query={'collection':'genre','genre':'detective','collection_page':'1'})) == '/browse?page=1&genre=detective'

@@ -74,7 +74,7 @@ class CachedFlibustaClient:
                                   source_timeout_seconds=self.source_timeout_seconds)
 
     async def genres(self):
-        return await self._cached("genres", "all", self.client.genres, lambda rows: rows,
+        return await self._cached("genres", "grouped-v2", self.client.genres, lambda rows: rows,
                                   source_timeout_seconds=self.source_timeout_seconds)
 
     async def genre_books(self, code):
