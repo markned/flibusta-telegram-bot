@@ -136,3 +136,8 @@ These are development-only; production code and requirements are unchanged.
   web work references are owner-bound, expire and have aggregate memory bounds.
 - No schema, dependencies, production worker count or reader limits changed.
   Details and validation: `docs/work-editions.md`.
+
+- Author typo guard: a unique two-token name hint may allow one edit per word
+  with a surname of at least 5 characters. Both word orders are supported;
+  confirmation precedes catalog requests, and quoted titles retain literal search.
+  Regression case: «Леа Толстнй» must offer «Лев Толстой», never books matching «Леа».

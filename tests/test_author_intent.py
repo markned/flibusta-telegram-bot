@@ -169,3 +169,37 @@ def test_explicit_patronymic_survives_query_normalization():
     outcome = asyncio.run(service(client).search("лев николаевич толстой"))
     assert [item.author_id for item in outcome.authors] == ["1"]
     assert client.expanded == ["1"]
+
+
+@pytest.mark.parametrize('query',['Леа Толстнй','Толстнй Леа','Джейи Остни'])
+def test_two_name_typos_require_confirmation_without_fragment_search(query):
+    class NoisyCatalog(Catalog):
+        async def search(self,query,limit=40):
+            self.book_queries.append(query)
+            return [SearchResult('900','Ор леа н','Ли Стеффи')] if query.casefold()=='леа' else []
+    client=NoisyCatalog()
+    outcome=asyncio.run(service(client).search(query))
+    assert outcome.plan.mode==SearchMode.AUTHOR
+    assert not outcome.books and not outcome.authors
+    assert outcome.suggested_query==('Джейн Остин' if 'Остни' in query else 'Лев Толстой')
+    assert client.book_queries==[] and client.author_queries==[] and client.expanded==[]
+
+
+def test_two_typo_suggestion_does_not_intercept_literal_titles_or_single_word():
+    from app.services.author_names import suggest_author_query
+    assert suggest_author_query('Леа') is None
+    assert suggest_author_query('Книга жизни') is None
+    class LiteralCatalog(Catalog):
+        async def search(self,query,limit=40):
+            self.book_queries.append(query)
+            return [SearchResult('901','Леа Толстнй','Другой автор')]
+    client=LiteralCatalog()
+    result=asyncio.run(service(client).search('«Леа Толстнй»'))
+    assert result.plan.mode==SearchMode.EXACT
+    assert result.books[0].book_id=='901' and not result.suggested_query
+
+
+def test_two_word_correction_remains_bounded_and_ambiguous_names_are_not_guessed():
+    from app.services.author_names import suggest_author_query
+    assert suggest_author_query('Леа Талстнй') is None
+    assert suggest_author_query('Леа Толстнй',['Лев Толстай']) is None

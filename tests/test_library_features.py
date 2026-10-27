@@ -918,3 +918,21 @@ def test_work_with_only_volumes_opens_selector_without_detail_request(monkeypatc
     assert client.details.await_count==0
     buttons=[b for row in callback.message.edit_payloads[-1][1]['reply_markup'].inline_keyboard for b in row]
     assert buttons[0].callback_data.endswith(':2') and buttons[1].callback_data.endswith(':1')
+
+
+def test_screenshot_two_typos_offer_owned_confirmation_not_unrelated_books(monkeypatch):
+    import app.main as main
+    from app.services.search import SearchService
+    class Catalog:
+        async def search(self,*args,**kwargs): raise AssertionError('must not search fragments')
+        async def search_authors(self,*args,**kwargs): raise AssertionError('confirmation comes before source lookup')
+    monkeypatch.setattr(main,'search_service',SearchService(Catalog(),book_limit=40,author_limit=20))
+    main.search_timestamps.clear()
+    message=_FakeMessage()
+    run(main.send_smart_results(message,'Леа Толстнй'))
+    text,payload=message.edit_payloads[-1]
+    assert 'Вы имели в виду' in text and 'Лев Толстой' in text
+    assert 'Точного совпадения не нашёл' not in text and 'Страница' not in text
+    button=next(b for row in payload['reply_markup'].inline_keyboard for b in row if b.callback_data.startswith('authorfix:'))
+    session=main.search_sessions[button.callback_data.split(':')[1]]
+    assert session.query=='Лев Толстой' and session.user_id==message.from_user.id and not session.results

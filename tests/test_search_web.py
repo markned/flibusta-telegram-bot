@@ -278,3 +278,17 @@ def test_web_author_catalog_continues_after_fifth_page(tmp_path):
             assert '/book/40' in following and '6/15' in following
             assert catalog.calls==[(32,8),(40,8)]
     asyncio.run(scenario())
+
+
+def test_web_two_name_typos_offer_confirmation_without_claiming_catalog_absence(tmp_path):
+    from app.services.search import SearchService
+    class Catalog:
+        async def search(self,*args,**kwargs): raise AssertionError('no fragment search')
+        async def search_authors(self,*args,**kwargs): raise AssertionError('no lookup before confirmation')
+    async def scenario():
+        async with browser(tmp_path,SearchService(Catalog(),book_limit=40,author_limit=20)) as client:
+            response=await client.get('/search',params={'q':'Леа Толстнй'})
+            soup=BeautifulSoup(await response.text(),'html.parser')
+            assert response.status==200 and soup.find('a',string='Лев Толстой')
+            assert 'Автор не найден' not in soup.get_text() and 'Ничего не нашлось' not in soup.get_text()
+    asyncio.run(scenario())
