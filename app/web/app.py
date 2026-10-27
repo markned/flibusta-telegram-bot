@@ -322,7 +322,7 @@ async def _search(request: web.Request) -> web.Response:
     error = None
     if outcome.plan.mode.value == "unsupported_topic":
         error = "Поиск работает по названию книги, автору или их сочетанию."
-    elif not outcome.books and not outcome.authors and not outcome.source_unavailable and deps.search_stats_repo is not None:
+    elif not outcome.books and not outcome.authors and not outcome.suggested_query and not outcome.query_choices and not outcome.source_unavailable and deps.search_stats_repo is not None:
         await deps.search_stats_repo.record_miss(query)
     if outcome.source_unavailable and not outcome.books and not outcome.authors:
         error = "Источник временно недоступен. Не удалось проверить наличие книги."

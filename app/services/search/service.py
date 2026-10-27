@@ -288,6 +288,11 @@ class SearchService:
     async def _search_author_intent(self, plan: SearchPlan) -> SearchOutcome:
         # Author intent is sticky: an empty/error author response must never
         # become a literal book search returning biographies of that author.
+        suggestion = suggest_author_query(plan.author or plan.cleaned_query)
+        if suggestion:
+            # Known name hints are confirmation only. No catalog request is
+            # useful until the user accepts; especially never search fragments.
+            return SearchOutcome(plan, [], [], (), suggested_query=suggestion)
         try:
             outcome = await self._search_author_only(plan)
         except Exception:

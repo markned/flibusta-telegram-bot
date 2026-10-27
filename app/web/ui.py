@@ -131,7 +131,7 @@ def search_page(
         content += f'<div class="notice">{escape(error)}</div>'
     elif clarification:
         content += f"<p>{escape(clarification)}</p>"
-    elif not books and not authors:
+    elif not books and not authors and not suggested_query:
         content += ("<p>Автор не найден. Проверь имя или выбери другой способ поиска.</p>" if author_query
                     else "<p>Ничего не нашлось. Попробуй сократить запрос.</p>")
     else:

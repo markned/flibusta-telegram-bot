@@ -1,7 +1,7 @@
 """Small author aliases and conservative name matching; not a morphology engine.
 
 The catalog supplies all IDs/results. Known names are routing hints only, and
-one-edit alternatives always require confirmation rather than silently correcting.
+Bounded typo alternatives always require confirmation rather than silently correcting.
 """
 
 from __future__ import annotations
@@ -162,7 +162,18 @@ def suggest_author_query(query: str, candidates=()) -> str | None:
         actual = name_tokens(name)
         if len(wanted) != len(actual):
             continue
-        differences = [(a, b) for a, b in zip(wanted, actual) if a != b]
-        if len(differences) == 1 and one_edit_apart(*differences[0]):
-            plausible.setdefault(actual, name)
+        # Either name order is allowed. Two changed words are considered only
+        # for a two-token name with a sufficiently long surname, and each word
+        # must be at most one edit away. This produces a suggestion, never IDs.
+        orders = (wanted, wanted[::-1]) if len(wanted) == 2 else (wanted,)
+        for ordered in orders:
+            differences = [(a, b) for a, b in zip(ordered, actual) if a != b]
+            two_name_typos = (
+                len(actual) == 2 and len(actual[-1]) >= 5 and len(differences) == 2
+            )
+            if (len(differences) == 1 or two_name_typos) and all(
+                one_edit_apart(a, b) for a, b in differences
+            ):
+                plausible.setdefault(actual, name)
+                break
     return next(iter(plausible.values())) if len(plausible) == 1 else None
