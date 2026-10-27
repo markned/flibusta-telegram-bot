@@ -137,7 +137,10 @@ These are development-only; production code and requirements are unchanged.
 - No schema, dependencies, production worker count or reader limits changed.
   Details and validation: `docs/work-editions.md`.
 
-- Author typo guard: a unique two-token name hint may allow one edit per word
-  with a surname of at least 5 characters. Both word orders are supported;
-  confirmation precedes catalog requests, and quoted titles retain literal search.
-  Regression case: «Леа Толстнй» must offer «Лев Толстой», never books matching «Леа».
+- Shared fuzzy query matching uses length-normalized edit evidence over complete
+  catalog names, initials and word order; ambiguity requires confirmation. A bounded
+  SQLite lexicon learns public names from catalog responses, not user messages.
+- Book acceptance requires support for every meaningful query word, including
+  edition/volume labels. HTML search highlighting no longer splits words; search
+  cache keys use text-v2. Query/request/time/memory bounds remain in place.
+- General validation and limitations: `docs/fuzzy-search.md`.

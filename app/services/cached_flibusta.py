@@ -17,6 +17,7 @@ from app.flibusta import (
 )
 from app.repositories.cache import CacheRepository
 from app.services.search.context import search_status
+from app.services.fuzzy_query import tokens
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +61,10 @@ class CachedFlibustaClient:
         self._max_inflight = 64
         self._waiters: dict[asyncio.Task, int] = {}
         self._author_catalog_lock = asyncio.Lock()
+        self._author_names = None
+        self._author_names_lock = asyncio.Lock()
+        self._author_names_dirty = False
+        self._author_names_saved = 0.0
 
     async def close(self) -> None:
         tasks = list(self._inflight.values())
@@ -67,6 +72,7 @@ class CachedFlibustaClient:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        await self._flush_author_names()
         await self.client.close()
 
     async def popular_books(self):
@@ -86,27 +92,31 @@ class CachedFlibustaClient:
                                   source_timeout_seconds=self.source_timeout_seconds)
 
     async def search(self, query: str, limit: int = 8):
-        return await self._cached(
+        books = await self._cached(
             "book_search",
-            f"{_cache_query(query)}:{limit}",
+            f"text-v2:{_cache_query(query)}:{limit}",
             lambda: self.client.search(query, limit),
             lambda rows: [SearchResult(**row) for row in rows],
             source_timeout_seconds=self.source_timeout_seconds,
         )
+        await self._learn_author_names(book.author for book in books if book.author)
+        return books
 
     async def search_authors(self, query: str, limit: int = 20):
-        return await self._cached(
+        authors = await self._cached(
             "author_search",
-            f"{_cache_query(query)}:{limit}",
+            f"text-v2:{_cache_query(query)}:{limit}",
             lambda: self.client.search_authors(query, limit),
             lambda rows: [AuthorResult(**row) for row in rows],
             source_timeout_seconds=self.source_timeout_seconds,
         )
+        await self._learn_author_names(author.name for author in authors)
+        return authors
 
     async def search_all(self, query: str, book_limit: int = 8, author_limit: int = 20):
         return await self._cached(
             "smart_search",
-            f"{_cache_query(query)}:{book_limit}:{author_limit}",
+            f"text-v2:{_cache_query(query)}:{book_limit}:{author_limit}",
             lambda: self.client.search_all(query, book_limit, author_limit),
             lambda pair: (
                 [SearchResult(**row) for row in pair[0]],
@@ -137,13 +147,15 @@ class CachedFlibustaClient:
             async with self._author_catalog_lock:
                 return await self.client.author_books(author_id, limit=None)
 
-        return await self._cached(
+        result = await self._cached(
             "author_books",
             f"{author_id}:catalog-v3",
             load,
             lambda pair: (pair[0], [SearchResult(**row) for row in pair[1]]),
             source_timeout_seconds=self.source_timeout_seconds,
         )
+        await self._learn_author_names([result[0]])
+        return result
 
     async def complete_work(self, work):
         from app.services.works import group_books, editions, identity
@@ -198,12 +210,85 @@ class CachedFlibustaClient:
         )
 
     async def details(self, book_id: str):
-        return await self._cached(
+        result = await self._cached(
             "book_details",
             book_id,
             lambda: self.client.details(book_id),
             _details_from_dict,
         )
+        await self._learn_author_names(getattr(result, "authors", []))
+        return result
+
+    async def _load_author_names(self):
+        if self._author_names is not None:
+            return True
+        try:
+            async with asyncio.timeout(0.1):
+                names = await self.repo.get("author-name-lexicon:v1") or []
+        except Exception:
+            logger.debug("author name lexicon read skipped")
+            return False
+        self._author_names = (
+            {
+                tuple(sorted(tokens(name))): name
+                for name in names[:2048]
+                if isinstance(name, str) and 0 < len(name) <= 120
+            }
+            if isinstance(names, list)
+            else {}
+        )
+        return True
+
+    async def author_name_hints(self):
+        if not self.enabled:
+            return ()
+        async with self._author_names_lock:
+            if not await self._load_author_names():
+                return ()
+            return tuple(reversed(self._author_names.values()))
+
+    async def _learn_author_names(self, names):
+        if not self.enabled:
+            return
+        async with self._author_names_lock:
+            if not await self._load_author_names():
+                return
+            for name in names:
+                if not isinstance(name, str) or not 0 < len(name) <= 120:
+                    continue
+                words = re.findall(r"[a-zа-яё]+", name.casefold())
+                if not 1 <= len(words) <= 5 or not any(len(w) >= 3 for w in words):
+                    continue
+                key = tuple(sorted(tokens(name)))
+                if (
+                    self._author_names.get(key) != name
+                    or next(reversed(self._author_names), None) != key
+                ):
+                    self._author_names.pop(key, None)
+                    self._author_names[key] = name
+                    self._author_names_dirty = True
+                while len(self._author_names) > 2048:
+                    self._author_names.pop(next(iter(self._author_names)))
+        if self._author_names_dirty and monotonic() - self._author_names_saved >= 60:
+            await self._flush_author_names()
+
+    async def _flush_author_names(self):
+        if not self.enabled or not self._author_names_dirty:
+            return
+        async with self._author_names_lock:
+            try:
+                self._author_names_saved = monotonic()
+                async with asyncio.timeout(0.1):
+                    await self.repo.set(
+                        "author-name-lexicon:v1",
+                        "author_lexicon",
+                        list(self._author_names.values()),
+                        30 * 86400,
+                    )
+                self._author_names_dirty = False
+                self._author_names_saved = monotonic()
+            except Exception:
+                logger.debug("author name lexicon write skipped")
 
     async def catalog_hints(self):
         if not self.enabled:

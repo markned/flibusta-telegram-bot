@@ -128,7 +128,7 @@ class FlibustaClient:
         result = {}
         for link in main.select('a[href^="/g/"]') if main else []:
             code = link.get("href", "").removeprefix("/g/")
-            name = link.get_text(" ", strip=True)
+            name = link.get_text()
             if re.fullmatch(r"[a-z0-9_]{1,48}", code) and name:
                 result[code] = {"code": code, "name": name[:120]}
                 heading = link.find_previous("h3")
@@ -440,7 +440,7 @@ def parse_search_results(markup: str, limit: int = 8) -> list[SearchResult]:
         if book_id in seen:
             continue
 
-        title = _clean_text(link.get_text(" ", strip=True))
+        title = _clean_text(link.get_text())
         if not title:
             continue
 
@@ -470,7 +470,7 @@ def parse_author_results(markup: str, limit: int = 20) -> list[AuthorResult]:
         if author_id in seen:
             continue
 
-        name = _clean_text(link.get_text(" ", strip=True))
+        name = _clean_text(link.get_text())
         if not name or name == "[Все]":
             continue
 
@@ -567,7 +567,7 @@ def _extract_series(soup: BeautifulSoup) -> list[SeriesRef]:
     for link in soup.select('a[href*="/sequence/"]'):
         href = str(link.get("href", ""))
         match = re.search(r"/sequence/(\d+)", href)
-        name = _clean_text(link.get_text(" ", strip=True))
+        name = _clean_text(link.get_text())
         if not name:
             continue
         nearby = _clean_text(link.parent.get_text(" ", strip=True)) if link.parent else name
@@ -595,7 +595,7 @@ def _extract_author_name(soup: BeautifulSoup, author_id: str) -> str:
 
     author_link = soup.select_one(f'a[href="/a/{author_id}"], a[href="a/{author_id}"]')
     if author_link:
-        author = _clean_text(author_link.get_text(" ", strip=True))
+        author = _clean_text(author_link.get_text())
         if author and author != "[Все]":
             return author
 
@@ -709,7 +709,7 @@ def _extract_author_books(
                 }
             if row_authors[key] and author_id not in row_authors[key]:
                 continue
-        title = _clean_text(link.get_text(" ", strip=True))
+        title = _clean_text(link.get_text())
         if title:
             results.append(SearchResult(book_id, title, author_name or None))
             seen.add(book_id)
@@ -816,7 +816,7 @@ def _extract_formats(soup: BeautifulSoup, base_url: str, book_id: str) -> list[D
         if code in non_download_codes or code in seen:
             continue
 
-        text = _clean_text(link.get_text(" ", strip=True)).upper()
+        text = _clean_text(link.get_text()).upper()
         if text in {"ЧИТАТЬ", "READ", "ONLINE"}:
             continue
         label = known.get(code, text or code.upper())
@@ -898,9 +898,9 @@ def _normalize_name(value: str) -> str:
 
 def _extract_genres(soup: BeautifulSoup) -> list[str]:
     genres = [
-        _clean_text(link.get_text(" ", strip=True))
+        _clean_text(link.get_text())
         for link in soup.select('a[href^="/g/"], a[href^="g/"]')
-        if _clean_text(link.get_text(" ", strip=True))
+        if _clean_text(link.get_text())
     ]
     return _dedupe([genre for genre in genres if genre != "[Все]"])
 
@@ -1008,7 +1008,7 @@ def _find_nearby_author(link) -> str | None:
     if not author_link:
         return None
 
-    author = _clean_text(author_link.get_text(" ", strip=True))
+    author = _clean_text(author_link.get_text())
     return author or None
 
 

@@ -586,7 +586,7 @@ def test_search_returns_dated_stale_cache_before_slow_refresh(tmp_path):
         db = Database(str(tmp_path / "stale.db"))
         await db.initialize()
         repo = CacheRepository(db)
-        await repo.set("book_search:дюна:10", "book_search", [SearchResult("10", "Дюна", "Фрэнк Герберт")], -1)
+        await repo.set("book_search:text-v2:дюна:10", "book_search", [SearchResult("10", "Дюна", "Фрэнк Герберт")], -1)
         cached = CachedFlibustaClient(SlowCatalog(), repo, enabled=True, ttls={"book_search": 60},
                                       source_timeout_seconds=10, stale_refresh_timeout_seconds=0.05)
         try:
@@ -642,7 +642,7 @@ def test_coalesced_stale_provenance_is_request_local(tmp_path):
         db = Database(str(tmp_path / "shared.db"))
         await db.initialize()
         repo = CacheRepository(db)
-        await repo.set("book_search:дюна:10", "book_search", [SearchResult("10", "Дюна", "Фрэнк Герберт")], -1)
+        await repo.set("book_search:text-v2:дюна:10", "book_search", [SearchResult("10", "Дюна", "Фрэнк Герберт")], -1)
         raw = Catalog()
         cached = CachedFlibustaClient(raw, repo, enabled=True, ttls={"book_search": 60},
                                       stale_refresh_timeout_seconds=0.05)
@@ -936,3 +936,17 @@ def test_screenshot_two_typos_offer_owned_confirmation_not_unrelated_books(monke
     button=next(b for row in payload['reply_markup'].inline_keyboard for b in row if b.callback_data.startswith('authorfix:'))
     session=main.search_sessions[button.callback_data.split(':')[1]]
     assert session.query=='Лев Толстой' and session.user_id==message.from_user.id and not session.results
+
+
+def test_explicit_author_flow_renders_general_fuzzy_confirmation(monkeypatch):
+    import app.main as main
+    from app.services.search import SearchService
+    class Catalog:
+        async def search_authors(self,*args,**kwargs): raise AssertionError('confirm before lookup')
+    monkeypatch.setattr(main,'search_service',SearchService(Catalog(),book_limit=40,author_limit=20))
+    main.search_timestamps.clear()
+    message=_FakeMessage()
+    run(main.send_author_results(message,'Федр Достоевисуий'))
+    text,payload=message.edit_payloads[-1]
+    assert 'Фёдор Достоевский' in text and 'Вы имели в виду' in text
+    assert any(b.callback_data.startswith('authorfix:') for row in payload['reply_markup'].inline_keyboard for b in row)

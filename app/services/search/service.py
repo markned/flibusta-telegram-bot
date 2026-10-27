@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
-from difflib import SequenceMatcher
 from typing import Protocol
 
 from app.services.search.context import SearchStatus, search_status
-from app.services.author_names import canonical_author_query, names_match, suggest_author_query
+from app.services.author_names import canonical_author_query, names_match, suggest_author_query, author_query_choices
 from app.services.catalog_query import (author_queries, author_plan, combined_plan, book_evidence,
                                         correction, probe_worthwhile, split_name, title_relevant)
 
@@ -16,7 +15,6 @@ from app.services.search.planner import build_search_plan
 from app.services.search.types import SearchMode, SearchOutcome, SearchPlan
 from app.services.search_logic import (
     base_title,
-    is_strong_book_match,
     norm,
     rank_and_dedupe_books,
     rank_authors,
@@ -41,6 +39,8 @@ class _SearchRun:
     responses: dict = field(default_factory=dict)
     plan: SearchPlan | None = None
     request_counts: dict = field(default_factory=dict)
+    observed: dict = field(default_factory=dict)
+    observed_authors: dict = field(default_factory=dict)
 
 
 _search_run: ContextVar[_SearchRun | None] = ContextVar("search_run", default=None)
@@ -113,12 +113,24 @@ class SearchService:
     async def _collect_authors(self, query):
         candidates = {}
         for variant in author_queries(query):
-            rows = await self._request("search_authors", variant, limit=self.author_limit)
+            rows = await self._request(
+                "search_authors", variant, limit=self.author_limit
+            )
             for item in rows:
                 candidates[item.author_id] = item
-            if any(author_name_matches(query, item.name) for item in candidates.values()):
+                state = _search_run.get()
+                if (
+                    state is not None
+                    and len(state.observed_authors) < self.author_limit * 3
+                ):
+                    state.observed_authors.setdefault(item.author_id, item)
+            from app.services.fuzzy_query import author_choices
+
+            if any(
+                author_name_matches(query, item.name) for item in candidates.values()
+            ) or author_choices(query, [item.name for item in candidates.values()]):
                 break
-        return list(candidates.values())[:self.author_limit * 3]
+        return list(candidates.values())[: self.author_limit * 3]
 
     async def _probe_authors(self, plan):
         # An optional classifier must not contaminate required-source provenance.
@@ -128,7 +140,8 @@ class SearchService:
             async with asyncio.timeout(min(0.75, max(0.01, self.timeout_seconds / 3))):
                 return await self._collect_authors(plan.cleaned_query), status
         except (Exception, TimeoutError):
-            return [], status
+            state = _search_run.get()
+            return list(state.observed_authors.values()) if state else [], status
         finally:
             search_status.reset(token)
 
@@ -151,8 +164,12 @@ class SearchService:
 
     async def _search_catalog(self, plan):
         book_task = asyncio.create_task(self._search_books_only(plan))
-        probe_task = (asyncio.create_task(self._probe_authors(plan))
-                      if probe_worthwhile(plan.cleaned_query) and hasattr(self.client, "search_authors") else None)
+        probe_task = (
+            asyncio.create_task(self._probe_authors(plan))
+            if probe_worthwhile(plan.cleaned_query)
+            and hasattr(self.client, "search_authors")
+            else None
+        )
         tasks = [book_task] + ([probe_task] if probe_task else [])
         try:
             book_error = None
@@ -162,7 +179,10 @@ class SearchService:
                 book_error = exc
                 outcome = SearchOutcome(plan, [], [], ())
             evidence = book_evidence(plan, outcome.books)
-            literal = any(norm(base_title(book.title)) == norm(plan.cleaned_query) for book in outcome.books)
+            literal = any(
+                norm(base_title(book.title)) == norm(plan.cleaned_query)
+                for book in outcome.books
+            )
             if evidence and not literal:
                 if len(evidence) == 1:
                     (author, title), books = next(iter(evidence.items()))
@@ -170,18 +190,62 @@ class SearchService:
                     self._adopt(resolved)
                     self._remember(resolved, books)
                     return SearchOutcome(resolved, books, [], outcome.used_queries)
-                return SearchOutcome(plan, [], [], outcome.used_queries,
-                                     query_choices=tuple(f"{author} — {title}" for author, title in evidence)[:4],
-                                     clarification="Уточни автора книги.")
-            candidates, status = await probe_task if probe_task else ([], SearchStatus())
-            authors = [item for item in candidates if author_name_matches(plan.cleaned_query, item.name)]
+                return SearchOutcome(
+                    plan,
+                    [],
+                    [],
+                    outcome.used_queries,
+                    query_choices=tuple(
+                        f"{author} — {title}" for author, title in evidence
+                    )[:4],
+                    clarification="Уточни автора книги.",
+                )
+            candidates, status = (
+                await probe_task if probe_task else ([], SearchStatus())
+            )
+            authors = [
+                item
+                for item in candidates
+                if author_name_matches(plan.cleaned_query, item.name)
+            ]
             if authors:
                 if literal:
                     self._adopt(plan)
-                    return SearchOutcome(plan, [], [], outcome.used_queries,
-                                         query_choices=tuple([f"книги {item.name}" for item in authors[:3]] + [f"«{plan.cleaned_query}»"]),
-                                         clarification="Это автор или название книги?")
+                    return SearchOutcome(
+                        plan,
+                        [],
+                        [],
+                        outcome.used_queries,
+                        query_choices=tuple(
+                            [f"книги {item.name}" for item in authors[:3]]
+                            + [f"«{plan.cleaned_query}»"]
+                        ),
+                        clarification="Это автор или название книги?",
+                    )
                 return await self._resolved_author(plan, authors, status)
+            from app.services.fuzzy_query import author_choices
+
+            names = [item.name for item in candidates]
+            observed = list(_search_run.get().observed.values())
+            names.extend(book.author for book in observed if book.author)
+            if hasattr(self.client, "author_name_hints"):
+                names.extend(await self.client.author_name_hints())
+            choices = author_choices(plan.cleaned_query, names) if not literal else ()
+            if choices:
+                self._adopt(author_plan(plan, plan.cleaned_query))
+                return SearchOutcome(
+                    author_plan(plan, plan.cleaned_query),
+                    [],
+                    [],
+                    outcome.used_queries,
+                    suggested_query=choices[0] if len(choices) == 1 else None,
+                    query_choices=tuple("книги " + name for name in choices)
+                    if len(choices) > 1
+                    else (),
+                    clarification="Какого автора ты имеешь в виду?"
+                    if len(choices) > 1
+                    else None,
+                )
             if outcome.books:
                 return outcome
             full_suggestion = correction(plan.cleaned_query, [], candidates)
@@ -198,13 +262,24 @@ class SearchService:
                 self._adopt(resolved)
                 return await self._search_author_title_with_fallback(resolved)
             if len(combinations) > 1:
-                return SearchOutcome(plan, [], [], outcome.used_queries,
-                                     query_choices=tuple(f"{author} — {title}" for author, title in combinations)[:4],
-                                     clarification="Уточни автора книги.")
+                return SearchOutcome(
+                    plan,
+                    [],
+                    [],
+                    outcome.used_queries,
+                    query_choices=tuple(
+                        f"{author} — {title}" for author, title in combinations
+                    )[:4],
+                    clarification="Уточни автора книги.",
+                )
             hints_books, hints_authors = [], []
             if hasattr(self.client, "catalog_hints"):
                 hints_books, hints_authors = await self.client.catalog_hints()
-            suggestion = correction(plan.cleaned_query, hints_books, [*candidates, *hints_authors])
+            suggestion = correction(
+                plan.cleaned_query,
+                [*observed, *hints_books],
+                [*candidates, *hints_authors],
+            )
             if suggestion:
                 return replace(outcome, suggested_query=suggestion)
             if book_error:
@@ -257,10 +332,13 @@ class SearchService:
         for index, query in enumerate(queries):
             used.append(query)
             try:
-                books = rank_and_dedupe_books(
-                    await self._request("search", query, limit=self.book_limit),
-                    plan.cleaned_query,
-                )
+                raw_books = await self._request("search", query, limit=self.book_limit)
+                state = _search_run.get()
+                if state is not None:
+                    for book in raw_books:
+                        if len(state.observed) < 200:
+                            state.observed.setdefault(book.book_id, book)
+                books = rank_and_dedupe_books(raw_books, plan.cleaned_query)
             except Exception as exc:
                 errors.append(exc)
                 continue
@@ -271,7 +349,9 @@ class SearchService:
                 state = _search_run.get()
                 self._remember(plan, ranked)
                 if state is None or not state.expanded:
-                    return SearchOutcome(plan, ranked, [], tuple(used), has_more=index + 1 < len(queries))
+                    return SearchOutcome(
+                        plan, ranked, [], tuple(used), has_more=index + 1 < len(queries)
+                    )
         best = rank_and_dedupe_books(candidates, plan.cleaned_query)
         if errors and not best:
             raise _as_flibusta_error(errors[0])
@@ -279,24 +359,37 @@ class SearchService:
 
     async def _search_author_only(self, plan: SearchPlan) -> SearchOutcome:
         query = canonical_author_query(plan.author or plan.cleaned_query)
+        choices = author_query_choices(query)
+        if choices:
+            return _author_confirmation(plan, choices)
         candidates = await self._collect_authors(query)
-        authors = rank_authors([item for item in candidates if author_name_matches(query, item.name)], query)
+        authors = rank_authors(
+            [item for item in candidates if author_name_matches(query, item.name)],
+            query,
+        )
         self._remember(plan, [], authors)
-        suggestion = None if authors else suggest_author_query(query, [item.name for item in candidates])
-        return SearchOutcome(plan, [], authors, (query,), suggested_query=suggestion)
+        choices = (
+            author_query_choices(query, [item.name for item in candidates])
+            if not authors
+            else ()
+        )
+        if choices:
+            return _author_confirmation(plan, choices, (query,))
+        return SearchOutcome(plan, [], authors, (query,))
 
     async def _search_author_intent(self, plan: SearchPlan) -> SearchOutcome:
         # Author intent is sticky: an empty/error author response must never
         # become a literal book search returning biographies of that author.
-        suggestion = suggest_author_query(plan.author or plan.cleaned_query)
-        if suggestion:
-            # Known name hints are confirmation only. No catalog request is
-            # useful until the user accepts; especially never search fragments.
-            return SearchOutcome(plan, [], [], (), suggested_query=suggestion)
         try:
             outcome = await self._search_author_only(plan)
         except Exception:
-            return SearchOutcome(plan, [], [], (), suggested_query=suggest_author_query(plan.author or plan.cleaned_query))
+            return SearchOutcome(
+                plan,
+                [],
+                [],
+                (),
+                suggested_query=suggest_author_query(plan.author or plan.cleaned_query),
+            )
         return await self._author_works(plan, outcome)
 
     async def _author_works(self, plan, outcome):
@@ -498,6 +591,20 @@ def title_matches(expected: str, actual: str) -> bool:
     return actual_norm == expected_norm or f" {expected_norm} " in f" {actual_norm} "
 
 
+def _author_confirmation(plan, choices, used=()):
+    return SearchOutcome(
+        plan,
+        [],
+        [],
+        used,
+        suggested_query=choices[0] if len(choices) == 1 else None,
+        query_choices=tuple("книги " + name for name in choices)
+        if len(choices) > 1
+        else (),
+        clarification="Какого автора ты имеешь в виду?" if len(choices) > 1 else None,
+    )
+
+
 def _as_flibusta_error(exc: Exception) -> FlibustaError:
     if isinstance(exc, FlibustaError):
         return exc
@@ -507,24 +614,33 @@ def _as_flibusta_error(exc: Exception) -> FlibustaError:
 
 
 def _candidate_matches(plan: SearchPlan, book: SearchResult) -> bool:
+    from app.services.fuzzy_query import full_query_supported
+    from app.services.works import editions
+
     expected = plan.title or plan.cleaned_query
+    refs = editions(book)
     if plan.mode == SearchMode.AUTHOR_TITLE:
-        # A person-like title (e.g. Евгений Онегин) can fool the intent heuristic.
-        # An exact whole-query title is evidence to recover without broadening
-        # ordinary author+title requests to unrelated books.
-        if (len(plan.cleaned_query.split()) == 2
-                and plan.primary_queries == (plan.cleaned_query,)
-                and norm(plan.cleaned_query) == norm(base_title(book.title))):
+        # Exact whole-title evidence can recover a person-like title.
+        if (
+            len(plan.cleaned_query.split()) == 2
+            and plan.primary_queries == (plan.cleaned_query,)
+            and any(norm(plan.cleaned_query) == norm(base_title(e.title)) for e in refs)
+        ):
             return True
-        if not book.author or not author_name_matches(plan.author or "", book.author):
-            return False
-        return title_relevant(expected, book.title) or title_matches(expected, book.title) or SequenceMatcher(None, norm(expected), norm(base_title(book.title))).ratio() >= 0.85
-    if plan.catalog_lookup and book.author:
-        split = split_name(expected, book.author)
-        if split and split[0] and title_relevant(split[0], book.title):
-            return True
-    if title_relevant(expected, book.title) or is_strong_book_match(book, expected):
-        return True
-    tokens = set(norm(expected).split())
-    title_tokens = set(norm(base_title(book.title)).split())
-    return bool(tokens and len(tokens & title_tokens) / len(tokens) >= 0.5)
+        return any(
+            e.author
+            and author_name_matches(plan.author or "", e.author)
+            and full_query_supported(expected, e.title)
+            for e in refs
+        )
+    if plan.catalog_lookup:
+        for edition in refs:
+            if edition.author:
+                split = split_name(expected, edition.author)
+                if split and split[0] and title_relevant(split[0], edition.title):
+                    return True
+    return any(
+        full_query_supported(query, edition.title, edition.author)
+        for query in plan.primary_queries or (expected,)
+        for edition in refs
+    )
