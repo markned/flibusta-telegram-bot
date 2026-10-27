@@ -592,20 +592,157 @@ async def search_text(message: Message) -> None:
     # Telegram messages. SearchService owns author/title routing and fallbacks.
     await send_smart_results(message, text)
 
-@router.callback_query(F.data.startswith("book:") | F.data.startswith("cbook:"))
+def _owned_work(callback, sid, work_id):
+    session = search_sessions.get(sid)
+    if (
+        session is None
+        or session.user_id != callback.from_user.id
+        or session.chat_id != callback.message.chat.id
+    ):
+        return None, None
+    return session, next((b for b in session.results if b.book_id == work_id), None)
+
+
+async def _show_work_editions(callback, session, work, page=0):
+    from app.services.works import editions, edition_order
+
+    if hasattr(flibusta, "complete_work") and work.source_author_id:
+        work = await flibusta.complete_work(work)
+        session = replace(
+            session,
+            results=[work if b.book_id == work.book_id else b for b in session.results],
+        )
+        search_sessions[session.session_id] = session
+    refs = sorted(editions(work), key=edition_order)
+    pages = total_pages(len(refs))
+    page = min(max(0, page), pages - 1)
+    kb = InlineKeyboardBuilder()
+    for index, ref in enumerate(refs[page * 8 : (page + 1) * 8], start=page * 8 + 1):
+        kb.row(
+            InlineKeyboardButton(
+                text=f"{index}. {ref.title}"[:64],
+                callback_data=f"edition:{session.session_id}:{work.book_id}:{ref.book_id}",
+            )
+        )
+    if pages > 1:
+        nav = []
+        if page:
+            nav.append(
+                InlineKeyboardButton(
+                    text="← Назад",
+                    callback_data=f"workeds:{session.session_id}:{work.book_id}:{page - 1}",
+                )
+            )
+        nav.append(
+            InlineKeyboardButton(text=f"{page + 1}/{pages}", callback_data="noop")
+        )
+        if page + 1 < pages:
+            nav.append(
+                InlineKeyboardButton(
+                    text="Дальше →",
+                    callback_data=f"workeds:{session.session_id}:{work.book_id}:{page + 1}",
+                )
+            )
+        kb.row(*nav)
+    kb.row(
+        InlineKeyboardButton(
+            text="← К произведениям",
+            callback_data=f"page:{session.session_id}:{session.page}",
+        )
+    )
+    await callback.message.edit_text(
+        f"<b>{escape(work.title)}</b>\nИздания и тома", reply_markup=kb.as_markup()
+    )
+
+
+@router.callback_query(F.data.startswith("workeds:"))
+async def work_editions(callback: CallbackQuery):
+    try:
+        _, sid, wid, raw_page = callback.data.split(":", 3)
+        session, work = _owned_work(callback, sid, wid)
+        page = int(raw_page)
+    except (ValueError, TypeError):
+        session, work = None, None
+    if session is None or work is None:
+        await callback_answer(callback, "Выдача устарела. Открой её заново.")
+        return
+    await callback_answer(callback)
+    try:
+        await _show_work_editions(callback, session, work, page)
+    except (FlibustaError, TimeoutError):
+        await callback_answer(
+            callback, "Не удалось загрузить издания. Попробуй ещё раз."
+        )
+
+
+async def _load_author_page(author_id):
+    if hasattr(flibusta, "author_works_page"):
+        return await flibusta.author_works_page(author_id)
+    from app.services.works import AuthorWorksPage, group_books
+
+    name, books = await flibusta.author_books(
+        author_id, limit=settings.search_results_limit
+    )
+    works = group_books(books, alphabetical=True)
+    return AuthorWorksPage(name, works, len(works), len(works), False)
+
+
+@router.callback_query(
+    F.data.startswith("book:")
+    | F.data.startswith("cbook:")
+    | F.data.startswith("wbook:")
+    | F.data.startswith("edition:")
+)
 async def show_book(callback: CallbackQuery) -> None:
     origin = None
-    if callback.data.startswith("cbook:"):
+    work = None
+    if callback.data.startswith(("wbook:", "edition:")):
+        parts = callback.data.split(":")
+        if len(parts) != (4 if parts[0] == "edition" else 3):
+            await callback_answer(callback, "Издание недоступно.")
+            return
+        origin, work = _owned_work(callback, parts[1], parts[2])
+        if origin is None or work is None:
+            await callback_answer(callback, "Выдача устарела. Открой её заново.")
+            return
+        from app.services.works import choose_default, editions
+
+        if parts[0] == "edition":
+            ref = (
+                next((e for e in editions(work) if e.book_id == parts[3]), None)
+                if len(parts) == 4
+                else None
+            )
+        else:
+            ref = choose_default(work)
+        if parts[0] == "edition" and ref is None:
+            await callback_answer(callback, "Издание недоступно.")
+            return
+        if ref is None:
+            await callback_answer(callback)
+            try:
+                await _show_work_editions(callback, origin, work)
+            except (FlibustaError, TimeoutError):
+                await callback_answer(callback, "Не удалось загрузить издания. Попробуй ещё раз.")
+            return
+        book_id = ref.book_id
+    elif callback.data.startswith("cbook:"):
         _, sid, book_id = callback.data.split(":", 2)
         origin = search_sessions.get(sid)
-        if (origin is None or origin.user_id != callback.from_user.id or origin.chat_id != callback.message.chat.id
-                or not any(book.book_id == book_id for book in origin.results)):
+        if (
+            origin is None
+            or origin.user_id != callback.from_user.id
+            or origin.chat_id != callback.message.chat.id
+            or not any(book.book_id == book_id for book in origin.results)
+        ):
             await callback_answer(callback, "Подборка устарела. Открой её заново.")
             return
     else:
         book_id = callback.data.split(":", 1)[1]
     started_at = monotonic()
-    log_user_action(callback.from_user, callback.message.chat.id, "book_open", book_id=book_id)
+    log_user_action(
+        callback.from_user, callback.message.chat.id, "book_open", book_id=book_id
+    )
     await callback_answer(callback)
 
     try:
@@ -632,21 +769,71 @@ async def show_book(callback: CallbackQuery) -> None:
         duration=elapsed(started_at),
     )
     preferred_format = await _preferred_format(callback.from_user.id)
-    await last_books_repo.upsert(callback.from_user.id, details.book_id, details.title, ", ".join(details.authors) or None, "opened")
+    await last_books_repo.upsert(
+        callback.from_user.id,
+        details.book_id,
+        details.title,
+        ", ".join(details.authors) or None,
+        "opened",
+    )
     is_favorite = await favorites_repo.exists(callback.from_user.id, details.book_id)
     if origin:
-        keyboard = render_formats_keyboard(details, preferred_format=preferred_format, is_favorite=is_favorite,
-                                           annotation_max_chars=settings.book_annotation_max_chars)
-        kb = InlineKeyboardBuilder.from_markup(keyboard) if keyboard else InlineKeyboardBuilder()
+        work = work or next((b for b in origin.results if b.book_id == book_id), None)
+        if work and details.author_refs:
+            work = replace(work, source_author_id=details.author_refs[0].author_id)
+            origin = replace(
+                origin,
+                results=[
+                    work if b.book_id == work.book_id else b for b in origin.results
+                ],
+            )
+            search_sessions[origin.session_id] = origin
+        keyboard = render_formats_keyboard(
+            details,
+            preferred_format=preferred_format,
+            is_favorite=is_favorite,
+            annotation_max_chars=settings.book_annotation_max_chars,
+        )
+        kb = (
+            InlineKeyboardBuilder.from_markup(keyboard)
+            if keyboard
+            else InlineKeyboardBuilder()
+        )
+        if work and (work.editions or work.source_author_id):
+            kb.row(
+                InlineKeyboardButton(
+                    text="Издания и тома",
+                    callback_data=f"workeds:{origin.session_id}:{work.book_id}:0",
+                )
+            )
         if origin.query == "Случайная книга":
-            kb.row(InlineKeyboardButton(text="🎲 Ещё",callback_data=f"browse:random:{book_id}"))
+            kb.row(
+                InlineKeyboardButton(
+                    text="🎲 Ещё", callback_data=f"browse:random:{book_id}"
+                )
+            )
             back = "browse:catalog"
         else:
             back = f"page:{origin.session_id}:{origin.page}"
-        kb.row(InlineKeyboardButton(text="← В подборку" if origin.query != "Случайная книга" else "← Каталог",callback_data=back))
-        await callback.message.edit_text(render_book_text(details, settings.book_annotation_max_chars), reply_markup=kb.as_markup())
+        kb.row(
+            InlineKeyboardButton(
+                text="← В подборку"
+                if origin.query != "Случайная книга"
+                else "← Каталог",
+                callback_data=back,
+            )
+        )
+        await callback.message.edit_text(
+            render_book_text(details, settings.book_annotation_max_chars),
+            reply_markup=kb.as_markup(),
+        )
     else:
-        await send_book_card(callback.message, details, preferred_format=preferred_format, is_favorite=is_favorite)
+        await send_book_card(
+            callback.message,
+            details,
+            preferred_format=preferred_format,
+            is_favorite=is_favorite,
+        )
 
 
 async def send_book_card(message: Message, details, *, preferred_format: str | None, is_favorite: bool) -> None:
@@ -729,7 +916,8 @@ async def show_book_author_books(callback: CallbackQuery) -> None:
         author_id=author_id,
     )
     try:
-        author_name, books = await flibusta.author_books(author_id, limit=settings.search_results_limit)
+        author_page = await _load_author_page(author_id)
+        author_name, books = author_page.name, author_page.books
     except FlibustaError as exc:
         log_user_action(
             callback.from_user,
@@ -759,6 +947,7 @@ async def show_book_author_books(callback: CallbackQuery) -> None:
         f"author:{author_name}",
         books,
         title=f"Книги автора: <b>{escape(author_name)}</b>",
+        author_id=author_id,author_offset=author_page.next_offset,author_total=author_page.total,author_has_more=author_page.has_more,
     )
     log_user_action(
         callback.from_user,
@@ -785,26 +974,71 @@ async def paginate_search(callback: CallbackQuery) -> None:
     session = search_sessions.get(session_id)
     if session is None:
         await callback_answer(callback)
-        await telegram_retry(lambda: callback.message.answer("Эта выдача уже устарела. Отправь запрос ещё раз."))
+        await telegram_retry(
+            lambda: callback.message.answer(
+                "Эта выдача уже устарела. Отправь запрос ещё раз."
+            )
+        )
         return
 
-    if callback.from_user.id != session.user_id or callback.message.chat.id != session.chat_id:
-        await telegram_retry(lambda: callback.answer("Это не твоя выдача.", show_alert=True))
+    if (
+        callback.from_user.id != session.user_id
+        or callback.message.chat.id != session.chat_id
+    ):
+        await telegram_retry(
+            lambda: callback.answer("Это не твоя выдача.", show_alert=True)
+        )
         return
 
     try:
         page = int(page_raw)
     except ValueError:
         await callback_answer(callback)
-        await telegram_retry(lambda: callback.message.answer("Не смог открыть эту страницу выдачи."))
+        await telegram_retry(
+            lambda: callback.message.answer("Не смог открыть эту страницу выдачи.")
+        )
         return
 
-    page_count = total_pages(len(session.results))
+    page_count = total_pages(
+        session.author_total
+        if session.author_total is not None
+        else len(session.results)
+    )
     if page < 0 or page >= page_count:
         await callback_answer(callback)
         await telegram_retry(lambda: callback.message.answer("Такой страницы уже нет."))
         return
 
+    if page * 8 >= len(session.results):
+        if (
+            not session.author_has_more
+            or not session.author_id
+            or page * 8 != len(session.results)
+        ):
+            await callback_answer(callback, "Сначала открой предыдущую страницу.")
+            return
+        try:
+            continuation = await flibusta.author_works_page(
+                session.author_id, offset=session.author_offset
+            )
+            if not continuation.books:
+                raise FlibustaError("Список изменился")
+            from app.services.works import group_books
+
+            session = replace(
+                session,
+                results=group_books(
+                    [*session.results, *continuation.books], alphabetical=True
+                ),
+                author_offset=continuation.next_offset,
+                author_total=continuation.total,
+                author_has_more=continuation.has_more,
+            )
+        except (FlibustaError, TimeoutError):
+            await callback_answer(
+                callback, "Не удалось загрузить продолжение. Попробуй ещё раз."
+            )
+            return
     updated = replace(session, page=page)
     search_sessions[session_id] = updated
     log_user_action(
@@ -900,7 +1134,8 @@ async def show_author_books(callback: CallbackQuery) -> None:
         author_id=author_id,
     )
     try:
-        author_name, books = await flibusta.author_books(author_id, limit=settings.search_results_limit)
+        author_page = await _load_author_page(author_id)
+        author_name, books = author_page.name, author_page.books
     except FlibustaError as exc:
         log_user_action(
             callback.from_user,
@@ -930,6 +1165,7 @@ async def show_author_books(callback: CallbackQuery) -> None:
         f"author:{author_name}",
         books,
         title=f"Книги автора: <b>{escape(author_name)}</b>",
+        author_id=author_id,author_offset=author_page.next_offset,author_total=author_page.total,author_has_more=author_page.has_more,
     )
     log_user_action(
         callback.from_user,
@@ -1315,7 +1551,8 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
         if len(authors) == 1 and books:
             heading = f"<b>Книги автора: {escape(authors[0].name)}</b>"
             session = _create_search_session(message.from_user.id, message.chat.id, plan.original_query, books,
-                                             title=notice + heading)
+                                             title=notice + heading, author_id=outcome.author_id,author_offset=outcome.author_offset,
+                                             author_total=outcome.author_total,author_has_more=outcome.author_has_more)
             markup = _author_intent_keyboard(message, author_query, base=_search_results_keyboard(session))
             await _send_or_edit(message, progress, _search_results_text(session), reply_markup=markup)
         elif authors:

@@ -23,6 +23,7 @@ sys.path.insert(0, str(ROOT))
 from app.flibusta import AuthorResult, FlibustaClient, SearchResult
 from app.services.search import SearchService
 from app.services.search_logic import norm
+from app.services.works import editions
 
 DATASET = ROOT / "tests/fixtures/popular_books.json"
 
@@ -152,8 +153,8 @@ async def benchmark(args):
             missing_before = getattr(client, "missing_requests", 0)
             try:
                 outcome = await service.search(case["query"])
-                matches = [(n, b) for n, b in enumerate(outcome.books, 1)
-                           if norm(b.title) == norm(case["title"]) and norm(b.author or "") == norm(case["author"])]
+                matches = [(n, edition) for n, b in enumerate(outcome.books, 1)
+                           if (edition := matching_edition(b, case)) is not None]
                 position, book = matches[0] if matches else (None, None)
                 status = "matched" if matches else ("source_unavailable" if getattr(outcome, "source_unavailable", False) else "unresolved_availability")
                 failures = failures + 1 if status == "source_unavailable" else 0
@@ -190,6 +191,13 @@ async def benchmark(args):
     if args.capture and isinstance(client, RecordingCatalog):
         Path(args.capture).write_text(json.dumps({"mode": mode, "responses": client.responses}, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({k: v for k, v in report.items() if k != "results"}, ensure_ascii=False, indent=2))
+
+
+def matching_edition(book, case):
+    # Visible rows now represent works; a specific volume must remain accessible
+    # under that row, with its exact title, author and actual catalog ID.
+    return next((e for e in editions(book) if norm(e.title)==norm(case["title"])
+                 and norm(e.author or "")==norm(case["author"])),None)
 
 
 def main():

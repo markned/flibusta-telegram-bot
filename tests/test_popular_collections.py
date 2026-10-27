@@ -215,3 +215,17 @@ def test_external_fetch_rejects_untrusted_redirect_and_oversized_body(monkeypatc
                 await module.fetch_ranking("yandex")
 
     asyncio.run(scenario())
+
+
+def test_saved_collection_metadata_keeps_backward_compatible_shape(tmp_path):
+    from app.repositories.db import Database
+    from app.repositories.cache import CacheRepository
+    async def scenario():
+        db=Database(str(tmp_path/'compat.sqlite'));await db.initialize();repo=CacheRepository(db)
+        class Client:
+            async def popular_books(self): return [SearchResult('1','Книга','Автор')]
+        async def unavailable(source): raise TimeoutError
+        service=PopularCollections(Client(),repo,fetch=unavailable,pause_seconds=0)
+        await service.refresh()
+        assert set((await repo.get('collection:flibusta'))[0])=={'book_id','title','author'}
+    asyncio.run(scenario())

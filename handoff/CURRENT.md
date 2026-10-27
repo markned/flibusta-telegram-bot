@@ -120,3 +120,19 @@ These are development-only; production code and requirements are unchanged.
   one-edit corrections require confirmation. Explicit about-author action stays
   separate. Web and Telegram labels/links preserve this distinction.
 - Details and limitations: `docs/search-author-intent.md`.
+
+## Work editions and author continuation
+
+- Author catalogs use the complete source metadata index via `author_works_page`,
+  with actual totals and continuation beyond the old 40-entry cutoff. Telegram
+  loads additional batches on demand; web renders pages of 8 works.
+- Search, authors, genres and popular lists group known editions by conservative
+  work + author identity. All actual edition IDs survive; collections/notes and
+  other authors remain separate. Author works sort alphabetically, tops retain rank.
+- Cards offer «Издания и тома», numeric volume order, conservative default selection
+  and return to the original page. Additional versions load only on demand from
+  the validated source author index. Downloads/delivery use the selected actual ID.
+- Author HTML is capped at 2 MiB, complete-index loads are serialized/coalesced;
+  web work references are owner-bound, expire and have aggregate memory bounds.
+- No schema, dependencies, production worker count or reader limits changed.
+  Details and validation: `docs/work-editions.md`.

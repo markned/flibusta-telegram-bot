@@ -3,23 +3,86 @@ from dataclasses import dataclass
 from uuid import uuid4
 from app.flibusta import AuthorResult
 
+
 @dataclass(frozen=True)
 class SearchSession:
- session_id:str; user_id:int; chat_id:int; query:str; title:str|None; page:int; results:list; return_to:str|None=None
+    session_id: str
+    user_id: int
+    chat_id: int
+    query: str
+    title: str | None
+    page: int
+    results: list
+    return_to: str | None = None
+    author_id: str | None = None
+    author_offset: int = 0
+    author_total: int | None = None
+    author_has_more: bool = False
+
+
 @dataclass(frozen=True)
 class AuthorSession:
- session_id:str; user_id:int; chat_id:int; query:str; page:int; authors:list[AuthorResult]
-search_sessions:dict[str,SearchSession]={}
-author_sessions:dict[str,AuthorSession]={}
-retry_sessions:dict[str,str]={}
-search_timestamps:dict[int,list[float]]={}
+    session_id: str
+    user_id: int
+    chat_id: int
+    query: str
+    page: int
+    authors: list[AuthorResult]
 
-def create_search_session(user_id:int,chat_id:int,query:str,results:list,title:str|None=None,return_to:str|None=None)->SearchSession:
- prune_sessions(search_sessions); session=SearchSession(uuid4().hex[:10],user_id,chat_id,query,title,0,results,return_to); search_sessions[session.session_id]=session; return session
 
-def create_author_session(user_id:int,chat_id:int,query:str,authors:list[AuthorResult])->AuthorSession:
- prune_sessions(author_sessions); session=AuthorSession(uuid4().hex[:10],user_id,chat_id,query,0,authors); author_sessions[session.session_id]=session; return session
+search_sessions: dict[str, SearchSession] = {}
+author_sessions: dict[str, AuthorSession] = {}
+retry_sessions: dict[str, str] = {}
+search_timestamps: dict[int, list[float]] = {}
 
-def prune_sessions(storage:dict[str,object])->None:
- if len(storage)>100:
-  for key in list(storage.keys())[:20]: storage.pop(key,None)
+
+def create_search_session(
+    user_id: int,
+    chat_id: int,
+    query: str,
+    results: list,
+    title: str | None = None,
+    return_to: str | None = None,
+    *,
+    author_id=None,
+    author_offset=0,
+    author_total=None,
+    author_has_more=False,
+) -> SearchSession:
+    from app.services.works import group_books
+
+    results = group_books(
+        results, alphabetical=bool(author_id or query.startswith("author:"))
+    )
+    prune_sessions(search_sessions)
+    session = SearchSession(
+        uuid4().hex[:10],
+        user_id,
+        chat_id,
+        query,
+        title,
+        0,
+        results,
+        return_to,
+        author_id,
+        author_offset,
+        author_total,
+        author_has_more,
+    )
+    search_sessions[session.session_id] = session
+    return session
+
+
+def create_author_session(
+    user_id: int, chat_id: int, query: str, authors: list[AuthorResult]
+) -> AuthorSession:
+    prune_sessions(author_sessions)
+    session = AuthorSession(uuid4().hex[:10], user_id, chat_id, query, 0, authors)
+    author_sessions[session.session_id] = session
+    return session
+
+
+def prune_sessions(storage: dict[str, object]) -> None:
+    if len(storage) > 100:
+        for key in list(storage.keys())[:20]:
+            storage.pop(key, None)

@@ -21,10 +21,22 @@ DOWNLOAD_PROGRESS_INTERVAL_SECONDS = 5
 
 
 @dataclass(frozen=True)
+class EditionRef:
+    book_id: str
+    title: str
+    author: str | None
+
+
+@dataclass(frozen=True)
 class SearchResult:
     book_id: str
     title: str
     author: str | None
+    editions: tuple[EditionRef, ...] = ()
+    source_author_id: str | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "editions", tuple(EditionRef(**e) if isinstance(e, dict) else e for e in self.editions))
 
 
 @dataclass(frozen=True)
@@ -198,9 +210,15 @@ class FlibustaClient:
         response = await self._get(url)
         return parse_author_results(response.text, limit=limit)
 
-    async def author_books(self, author_id: str, limit: int = 40) -> tuple[str, list[SearchResult]]:
+    async def author_books(
+        self, author_id: str, limit: int | None = 40
+    ) -> tuple[str, list[SearchResult]]:
         page_url = urljoin(self.base_url + "/", f"a/{author_id}")
-        response = await self._get(page_url)
+        response = (
+            await self._get(page_url, max_bytes=2 * 1024 * 1024)
+            if limit is None
+            else await self._get(page_url)
+        )
         return parse_author_page(response.text, author_id, limit=limit)
 
     async def series_books(self, series_id: str, limit: int = 80) -> tuple[str, list[SearchResult]]:
@@ -227,25 +245,39 @@ class FlibustaClient:
         content, filename, content_type = _unzip_fb2_if_needed(content, filename, content_type, max_bytes)
         return content, filename, content_type
 
-    async def _get(self, url: str) -> httpx.Response:
+    async def _get(self, url: str, *, max_bytes: int | None = None) -> httpx.Response:
         last_error: httpx.HTTPError | None = None
 
         for attempt in range(1, self.retries + 1):
             try:
-                response = await self._get_following_redirects(url)
+                response = (
+                    await self._get_following_redirects(url, max_bytes=max_bytes)
+                    if max_bytes is not None
+                    else await self._get_following_redirects(url)
+                )
                 response.raise_for_status()
                 return response
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
-                if status_code not in {429, 500, 502, 503, 504} or attempt == self.retries:
-                    raise FlibustaError(f"Flibusta вернула HTTP {status_code}.") from exc
+                if (
+                    status_code not in {429, 500, 502, 503, 504}
+                    or attempt == self.retries
+                ):
+                    raise FlibustaError(
+                        f"Flibusta вернула HTTP {status_code}."
+                    ) from exc
                 last_error = exc
             except httpx.HTTPError as exc:
                 last_error = exc
                 if attempt == self.retries:
                     raise FlibustaError("Не удалось подключиться к Flibusta.") from exc
 
-            logger.warning("Flibusta request failed, retrying (%d/%d): %s", attempt, self.retries, _safe_log_url(url))
+            logger.warning(
+                "Flibusta request failed, retrying (%d/%d): %s",
+                attempt,
+                self.retries,
+                _safe_log_url(url),
+            )
             await sleep(self.retry_delay * attempt)
 
         raise FlibustaError("Не удалось подключиться к Flibusta.") from last_error
@@ -271,12 +303,34 @@ class FlibustaClient:
 
         raise FlibustaError("Не удалось скачать файл с Flibusta.") from last_error
 
-    async def _get_following_redirects(self, url: str) -> httpx.Response:
+    async def _get_following_redirects(
+        self, url: str, *, max_bytes: int | None = None
+    ) -> httpx.Response:
         current_url = url
         seen_urls: set[str] = set()
 
         for redirect_index in range(self.max_redirects + 1):
-            response = await self._client.get(current_url)
+            if max_bytes is None:
+                response = await self._client.get(current_url)
+            else:
+                async with self._client.stream("GET", current_url) as stream:
+                    data = bytearray()
+                    async for chunk in stream.aiter_bytes(65536):
+                        if len(data) + len(chunk) > max_bytes:
+                            raise FlibustaError(
+                                "Список автора слишком большой для одного ответа. Попробуй поиск по названию."
+                            )
+                        data.extend(chunk)
+                    response = httpx.Response(
+                        stream.status_code,
+                        headers={
+                            key: value
+                            for key, value in stream.headers.items()
+                            if key.lower() not in {"content-encoding", "content-length"}
+                        },
+                        content=bytes(data),
+                        request=stream.request,
+                    )
             if response.status_code not in {301, 302, 303, 307, 308}:
                 return response
 
@@ -428,12 +482,18 @@ def parse_author_results(markup: str, limit: int = 20) -> list[AuthorResult]:
     return results
 
 
-def parse_author_page(markup: str, author_id: str, limit: int = 40) -> tuple[str, list[SearchResult]]:
+def parse_author_page(
+    markup: str, author_id: str, limit: int | None = 40
+) -> tuple[str, list[SearchResult]]:
     soup = BeautifulSoup(markup, "lxml")
     author_name = _extract_author_name(soup, author_id)
+    if limit is None and (soup.select_one("#main") is None or not author_name):
+        raise FlibustaError("Не удалось прочитать список автора. Попробуй позже.")
     books = _extract_author_books(soup, author_id, author_name, limit=limit)
     normalized_books = [
-        SearchResult(book_id=item.book_id, title=item.title, author=author_name or item.author)
+        SearchResult(
+            book_id=item.book_id, title=item.title, author=author_name or item.author
+        )
         for item in books
     ]
     return author_name or f"Автор {author_id}", normalized_books
@@ -629,79 +689,33 @@ def _extract_author_books(
     soup: BeautifulSoup,
     author_id: str,
     author_name: str,
-    limit: int = 40,
+    limit: int | None = 40,
 ) -> list[SearchResult]:
     main = soup.select_one("#main") or soup.body or soup
-    results: list[SearchResult] = []
-    seen: set[str] = set()
-
-    for container in main.find_all(["li", "tr", "p"]):
-        book_link = container.select_one('a[href^="/b/"], a[href^="b/"]')
-        if book_link is None:
-            continue
-
-        container_author_ids = {
-            author_match.group(1)
-            for author_link in container.select('a[href^="/a/"], a[href^="a/"]')
-            if (author_match := re.match(r"/?a/(\d+)", author_link.get("href", "")))
-        }
-        if container_author_ids and author_id not in container_author_ids:
-            continue
-
-        href = book_link.get("href", "")
-        match = re.search(r"/?b/(\d+)$", href)
-        if not match:
-            continue
-
-        book_id = match.group(1)
+    results, seen, row_authors = [], set(), {}
+    for link in main.find_all("a", href=re.compile(r"^/?b/\d+$")):
+        book_id = link["href"].rstrip("/").split("/")[-1]
         if book_id in seen:
             continue
-
-        title = _clean_text(book_link.get_text(" ", strip=True))
-        if not title:
-            continue
-
-        results.append(SearchResult(book_id=book_id, title=title, author=author_name or None))
-        seen.add(book_id)
-        if len(results) >= limit:
-            break
-
-    if results:
-        return results
-
-    for link in main.select('a[href^="/b/"], a[href^="b/"]'):
-        href = link.get("href", "")
-        match = re.search(r"/?b/(\d+)$", href)
-        if not match:
-            continue
-
-        book_id = match.group(1)
-        if book_id in seen:
-            continue
-
-        container = link.find_parent(["li", "tr", "p", "div"])
-        if container is None:
-            continue
-
-        container_author_ids = {
-            author_match.group(1)
-            for author_link in container.select('a[href^="/a/"], a[href^="a/"]')
-            if (author_match := re.match(r"/?a/(\d+)", author_link.get("href", "")))
-        }
-        if author_id not in container_author_ids:
-            continue
-
+        container = link.find_parent(["li", "tr", "p", "div", "form"])
+        # The real author catalog is one flat form, not one div per book.
+        # Never rescan that entire form for every one of its hundreds of links.
+        if container is not None and container is not main and container.name != "form":
+            key = id(container)
+            if key not in row_authors:
+                row_authors[key] = {
+                    a["href"].rstrip("/").split("/")[-1]
+                    for a in container.find_all("a", href=re.compile(r"^/?a/\d+$"))
+                }
+            if row_authors[key] and author_id not in row_authors[key]:
+                continue
         title = _clean_text(link.get_text(" ", strip=True))
-        if not title:
-            continue
-
-        results.append(SearchResult(book_id=book_id, title=title, author=author_name or None))
-        seen.add(book_id)
-        if len(results) >= limit:
-            break
-
+        if title:
+            results.append(SearchResult(book_id, title, author_name or None))
+            seen.add(book_id)
+            if limit is not None and len(results) >= limit:
+                break
     return results
-
 
 
 def _extract_cover_url(soup: BeautifulSoup, base_url: str) -> str | None:

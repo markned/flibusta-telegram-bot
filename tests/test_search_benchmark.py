@@ -20,3 +20,13 @@ def test_pinned_population_produces_thirty_books_and_ninety_distinct_cases():
 def test_incomplete_replay_reports_coverage_gap_instead_of_empty_catalog():
     with pytest.raises(RuntimeError, match="Replay does not cover"):
         asyncio.run(RecordingCatalog(responses={}).search("Дюна"))
+
+
+def test_benchmark_finds_exact_edition_inside_work_without_accepting_other_volume():
+    from app.flibusta import SearchResult
+    from app.services.works import group_books
+    from scripts.search_benchmark import matching_edition
+    work=group_books([SearchResult('1','Роман','Автор'),SearchResult('2','Роман. Том III','Автор')])[0]
+    assert matching_edition(work,{'title':'Роман. Том III','author':'Автор'}).book_id=='2'
+    assert matching_edition(work,{'title':'Роман. Том II','author':'Автор'}) is None
+    assert matching_edition(work,{'title':'Роман. Том III','author':'Другой'}) is None

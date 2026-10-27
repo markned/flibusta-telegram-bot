@@ -8,23 +8,78 @@ from app.pagination import SEARCH_PAGE_SIZE, page_items, total_pages
 from app.repositories.download_history import DownloadHistoryItem
 from app.state import SearchSession, AuthorSession
 
-def search_results_text(session:SearchSession,title:str|None=None)->str:
- total=len(session.results); pages=total_pages(total); start=session.page*SEARCH_PAGE_SIZE+1; end=min(total,(session.page+1)*SEARCH_PAGE_SIZE)
- heading=title or session.title or f'<b>Нашёл книги</b>\nЗапрос: <b>{escape(session.query)}</b>'
- if session.return_to: return heading
- page_text=f'\nСтраница {session.page+1}/{pages}' if pages>1 else ''
- return f'{heading}\n\nПоказаны {start}–{end} из {total}{page_text}'
-def search_results_keyboard(session:SearchSession):
- kb=InlineKeyboardBuilder()
- for item in page_items(session.results,session.page): kb.row(InlineKeyboardButton(text=(item.title if not item.author else f'{item.title} - {item.author}')[:64],callback_data=(f'cbook:{session.session_id}:{item.book_id}' if session.return_to else f'book:{item.book_id}')))
- pages=total_pages(len(session.results)); nav=[]
- if pages>1:
-  if session.page>0: nav.append(InlineKeyboardButton(text='<< Назад',callback_data=f'page:{session.session_id}:{session.page-1}'))
-  nav.append(InlineKeyboardButton(text=f'{session.page+1}/{pages}',callback_data='noop'))
-  if session.page<pages-1: nav.append(InlineKeyboardButton(text='Еще >>',callback_data=f'page:{session.session_id}:{session.page+1}'))
- if nav: kb.row(*nav)
- if session.return_to: kb.row(InlineKeyboardButton(text='← Назад к разделу',callback_data=session.return_to))
- return kb.as_markup()
+def search_results_text(session: SearchSession, title: str | None = None) -> str:
+    total = (
+        session.author_total
+        if session.author_total is not None
+        else len(session.results)
+    )
+    pages = total_pages(total)
+    start = session.page * SEARCH_PAGE_SIZE + 1
+    end = min(total, (session.page + 1) * SEARCH_PAGE_SIZE)
+    heading = (
+        title
+        or session.title
+        or f"<b>Нашёл книги</b>\nЗапрос: <b>{escape(session.query)}</b>"
+    )
+    if session.return_to:
+        return heading
+    page_text = f"\nСтраница {session.page + 1}/{pages}" if pages > 1 else ""
+    return f"{heading}\n\nПоказаны {start}–{end} из {total}{page_text}"
+
+
+def search_results_keyboard(session: SearchSession):
+    kb = InlineKeyboardBuilder()
+    for item in page_items(session.results, session.page):
+        kb.row(
+            InlineKeyboardButton(
+                text=(
+                    item.title if not item.author else f"{item.title} - {item.author}"
+                )[:64],
+                callback_data=(
+                    f"wbook:{session.session_id}:{item.book_id}"
+                    if item.editions
+                    else f"cbook:{session.session_id}:{item.book_id}"
+                ),
+            )
+        )
+    pages = total_pages(
+        session.author_total
+        if session.author_total is not None
+        else len(session.results)
+    )
+    nav = []
+    if pages > 1:
+        if session.page > 0:
+            nav.append(
+                InlineKeyboardButton(
+                    text="<< Назад",
+                    callback_data=f"page:{session.session_id}:{session.page - 1}",
+                )
+            )
+        nav.append(
+            InlineKeyboardButton(
+                text=f"{session.page + 1}/{pages}", callback_data="noop"
+            )
+        )
+        if session.page < pages - 1:
+            nav.append(
+                InlineKeyboardButton(
+                    text="Еще >>",
+                    callback_data=f"page:{session.session_id}:{session.page + 1}",
+                )
+            )
+    if nav:
+        kb.row(*nav)
+    if session.return_to:
+        kb.row(
+            InlineKeyboardButton(
+                text="← Назад к разделу", callback_data=session.return_to
+            )
+        )
+    return kb.as_markup()
+
+
 def author_results_text(session:AuthorSession)->str:
  total=len(session.authors); pages=total_pages(total); start=session.page*SEARCH_PAGE_SIZE+1; end=min(total,(session.page+1)*SEARCH_PAGE_SIZE)
  page_text=f'\nСтраница {session.page+1}/{pages}' if pages>1 else ''
@@ -44,7 +99,7 @@ def combined_results_text(query,books,authors):
  return f'<b>Нашёл несколько вариантов</b>\nЗапрос: <b>{escape(query)}</b>\n\nСначала книги, ниже авторы.\n\n<b>Книги</b>\n{bl}\n\n<b>Авторы</b>\n{al}'
 def combined_results_keyboard(bs:SearchSession,aus:AuthorSession):
  kb=InlineKeyboardBuilder()
- for item in bs.results[:5]: kb.row(InlineKeyboardButton(text=(item.title if not item.author else f'{item.title} - {item.author}')[:64],callback_data=f'book:{item.book_id}'))
+ for item in bs.results[:5]: kb.row(InlineKeyboardButton(text=(item.title if not item.author else f'{item.title} - {item.author}')[:64],callback_data=f'wbook:{bs.session_id}:{item.book_id}' if item.editions else f'cbook:{bs.session_id}:{item.book_id}'))
  for item in aus.authors[:5]: kb.row(InlineKeyboardButton(text=f'Автор: {item.name}'[:64],callback_data=f'author:{aus.session_id}:{item.author_id}'))
  kb.row(InlineKeyboardButton(text='Показать больше книг',callback_data=f'page:{bs.session_id}:0'),InlineKeyboardButton(text='Показать больше авторов',callback_data=f'apage:{aus.session_id}:0')); return kb.as_markup()
 def book_text(details:BookDetails,annotation_max_chars:int,full_annotation:bool=False)->str:

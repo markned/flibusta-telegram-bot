@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import re
 from time import monotonic
@@ -23,6 +23,8 @@ from app.services.kindle import mask_email, sanitize_filename
 from app.services.search.types import outcome_notice
 from app.services.catalog_browse import browse_catalog
 from app.services.popular_collections import SOURCES
+from app.services.works import group_books, choose_default, editions, edition_order
+from app.services.work_registry import WorkRegistry
 from app.services.covers.download import CoverDownloadError, download_cover
 from app.web.device import detect_device
 from app.web import ui
@@ -30,6 +32,7 @@ from app.web import ui
 
 logger = logging.getLogger(__name__)
 SESSION_COOKIE = "flibusta_web_session"
+WORKS_KEY = web.AppKey("works", WorkRegistry)
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,7 @@ DOWNLOAD_SEMAPHORE_KEY = web.AppKey("download_semaphore", asyncio.Semaphore)
 def build_web_app(deps: WebDependencies) -> web.Application:
     app = web.Application(middlewares=[_auth_middleware, _error_middleware], client_max_size=32 * 1024)
     app[DEPS_KEY] = deps
+    app[WORKS_KEY] = WorkRegistry()
     app[PAIR_LIMITER_KEY] = PairRateLimiter()
     app[SEARCH_LIMITER_KEY] = PairRateLimiter(
         limit=max(1, deps.search_rate_limit_per_minute),
@@ -111,6 +115,7 @@ def build_web_app(deps: WebDependencies) -> web.Application:
     app.router.add_get("/author/{author_id}", _author)
     app.router.add_get("/series/{series_id}", _series)
     app.router.add_get("/book/{book_id}", _book)
+    app.router.add_get("/work/{token}", _work)
     app.router.add_get("/cover/{book_id}", _cover)
     app.router.add_get("/favorites", _favorites)
     app.router.add_post("/favorite/{action}/{book_id}", _favorite_action)
@@ -230,6 +235,58 @@ async def _logout(request: web.Request) -> web.Response:
     raise response
 
 
+def _work_links(request, books, return_url):
+    return {
+        book.book_id: "/work/"
+        + request.app[WORKS_KEY].add(int(request["user_id"]), book, return_url)
+        for book in books
+        if book.editions
+    }
+
+
+async def _work(request):
+    ref = request.app[WORKS_KEY].get(
+        request.match_info["token"], int(request["user_id"])
+    )
+    if ref is None:
+        return _html(
+            ui.page(
+                "Выдача устарела",
+                "<p>Открой поиск или подборку заново.</p>",
+                authenticated=True,
+            ),
+            status=410,
+        )
+    if request.query.get("editions") == "1" and hasattr(
+        request.app[DEPS_KEY].flibusta, "complete_work"
+    ):
+        work = await request.app[DEPS_KEY].flibusta.complete_work(ref.work)
+        try:
+            ref = request.app[WORKS_KEY].set_work(
+                request.match_info["token"], int(request["user_id"]), work
+            )
+        except ValueError:
+            raise web.HTTPBadRequest(text="Слишком много изданий. Уточни название.")
+        if ref is None:
+            raise web.HTTPGone(text="Выдача устарела. Открой её заново.")
+    base = "/work/" + request.match_info["token"]
+    requested = request.query.get("edition")
+    selected = (
+        next((e for e in editions(ref.work) if e.book_id == requested), None)
+        if requested
+        else choose_default(ref.work)
+    )
+    if requested and selected is None:
+        raise web.HTTPBadRequest(text="Неизвестное издание")
+    if request.query.get("editions") == "1" or selected is None:
+        try:
+            page_number = max(0, min(10000, int(request.query.get("page", "0"))))
+        except ValueError:
+            raise web.HTTPBadRequest(text="Неизвестная страница")
+        return _html(ui.editions_page(ref.work, base, ref.return_url, page_number))
+    return await _book(request, book_id=selected.book_id, work_ref=ref)
+
+
 async def _search(request: web.Request) -> web.Response:
     query = " ".join(request.query.get("q", "").split())[:160]
     if not query:
@@ -257,6 +314,11 @@ async def _search(request: web.Request) -> web.Response:
             query, [], [], error="Источник временно недоступен. Не удалось проверить наличие книги.",
             retry=True, expanded=expanded, about_author=request.query.get("mode") == "about",
         ), status=503)
+    if outcome.author_id:
+        raise web.HTTPSeeOther(f"/author/{outcome.author_id}?page={page_number}")
+    outcome_books=group_books(outcome.books)
+    visible_page=min(page_number,max(0,(len(outcome_books)-1)//20))
+    links=_work_links(request,outcome_books[visible_page*20:(visible_page+1)*20],str(request.rel_url))
     error = None
     if outcome.plan.mode.value == "unsupported_topic":
         error = "Поиск работает по названию книги, автору или их сочетанию."
@@ -265,13 +327,13 @@ async def _search(request: web.Request) -> web.Response:
     if outcome.source_unavailable and not outcome.books and not outcome.authors:
         error = "Источник временно недоступен. Не удалось проверить наличие книги."
     return _html(ui.search_page(
-        query, outcome.books, outcome.authors, error=error,
+        query, outcome_books, outcome.authors, error=error,
         notice=outcome_notice(outcome), match_query=outcome.plan.title or outcome.plan.cleaned_query,
         has_more=outcome.has_more, retry=outcome.source_unavailable or outcome.partial,
         expanded=expanded, page_number=page_number,
         author_query=(outcome.plan.author or outcome.plan.cleaned_query) if outcome.plan.mode.value == "author" else None,
         suggested_query=outcome.suggested_query, about_author=outcome.about_author,
-        query_choices=outcome.query_choices, clarification=outcome.clarification,
+        query_choices=outcome.query_choices, clarification=outcome.clarification, work_links=links,
     ), status=503 if error and outcome.source_unavailable else 200)
 
 
@@ -304,22 +366,42 @@ async def _browse(request: web.Request) -> web.Response:
             title,books,genres = "Популярное",[],[]
     except ValueError:
         raise web.HTTPBadRequest(text="Неизвестный раздел или страница.")
+    books=group_books(books)
+    visible_page=min(page_number,max(0,(len(books)-1)//8))
+    links=_work_links(request,books[visible_page*8:(visible_page+1)*8],str(request.rel_url))
     return _html(ui.browse_page(title,books,genres,page_number=page_number,genre=genre,
-                               source=source,view=view,group=group))
+                               source=source,view=view,group=group,work_links=links))
 
 
 async def _author(request: web.Request) -> web.Response:
     deps: WebDependencies = request.app[DEPS_KEY]
     author_id = _catalog_id(request.match_info["author_id"])
-    name, books = await deps.flibusta.author_books(author_id, limit=40)
-    return _html(ui.simple_books_page(f"Книги автора: {name}", books, "Книги не найдены."))
+    try:
+        page_number = max(0, min(10000, int(request.query.get("page", "0"))))
+    except ValueError:
+        raise web.HTTPBadRequest(text="Неизвестная страница")
+    if hasattr(deps.flibusta, "author_works_page"):
+        page = await deps.flibusta.author_works_page(
+            author_id, offset=page_number * 8, limit=8
+        )
+        name, books, total = page.name, page.books, page.total
+    else:
+        name, all_books = await deps.flibusta.author_books(author_id, limit=40)
+        works = group_books(all_books, alphabetical=True)
+        books, total = works[page_number * 8 : (page_number + 1) * 8], len(works)
+    links = _work_links(request, books, f"/author/{author_id}?page={page_number}")
+    return _html(
+        ui.author_works_page(name, books, author_id, page_number, total, links)
+    )
 
 
 async def _series(request: web.Request) -> web.Response:
     deps: WebDependencies = request.app[DEPS_KEY]
     series_id = _catalog_id(request.match_info["series_id"])
     name, books = await deps.flibusta.series_books(series_id, limit=80)
-    return _html(ui.simple_books_page(f"Серия: {name}", books, "Книги серии не найдены."))
+    books=group_books(books)
+    return _html(ui.simple_books_page(f"Серия: {name}", books, "Книги серии не найдены.",
+                                     work_links=_work_links(request,books,str(request.rel_url))))
 
 
 def _collection_return(request):
@@ -336,10 +418,12 @@ def _collection_return(request):
     return "/browse?"+urlencode(params)
 
 
-async def _book(request: web.Request) -> web.Response:
+async def _book(request: web.Request, book_id=None, work_ref=None) -> web.Response:
     deps: WebDependencies = request.app[DEPS_KEY]
     user_id = int(request["user_id"])
-    details = await deps.flibusta.details(_catalog_id(request.match_info["book_id"]))
+    details = await deps.flibusta.details(
+        book_id or _catalog_id(request.match_info["book_id"])
+    )
     favorite, kindle, pocketbook = await asyncio.gather(
         deps.favorites_repo.exists(user_id, details.book_id),
         deps.kindle_settings_repo.get(user_id),
@@ -364,6 +448,36 @@ async def _book(request: web.Request) -> web.Response:
                 cover_url = f"/cover/{quote(details.book_id)}"
         except Exception:
             logger.info("web cover lookup skipped book_id=%s", details.book_id)
+    editions_url = None
+    if work_ref:
+        if details.author_refs:
+            work_ref = replace(
+                work_ref,
+                work=replace(
+                    work_ref.work, source_author_id=details.author_refs[0].author_id
+                ),
+            )
+            work_ref = request.app[WORKS_KEY].set_work(
+                request.match_info["token"], user_id, work_ref.work
+            )
+            if work_ref is None:
+                raise web.HTTPGone(text="Выдача устарела. Открой её заново.")
+        editions_url = "/work/" + request.match_info["token"] + "?editions=1"
+    elif details.author_refs:
+        work = group_books(
+            [
+                SearchResult(
+                    details.book_id,
+                    details.title,
+                    ", ".join(details.authors),
+                    source_author_id=details.author_refs[0].author_id,
+                )
+            ]
+        )[0]
+        token = request.app[WORKS_KEY].add(
+            user_id, work, _collection_return(request) or str(request.rel_url)
+        )
+        editions_url = "/work/" + token + "?editions=1"
     return _html(
         ui.book_page(
             details,
@@ -373,8 +487,11 @@ async def _book(request: web.Request) -> web.Response:
             pocketbook_configured=bool(pocketbook and pocketbook.enabled),
             notice=request.query.get("notice"),
             cover_url=cover_url,
-            return_url=_collection_return(request),
-            random_next=f"/browse?view=random&exclude={details.book_id}" if request.query.get("collection") == "random" else None,
+            return_url=work_ref.return_url if work_ref else _collection_return(request),
+            editions_url=editions_url,
+            random_next=f"/browse?view=random&exclude={details.book_id}"
+            if request.query.get("collection") == "random"
+            else None,
         )
     )
 
