@@ -25,17 +25,8 @@ def base_title(title: str) -> str:
 
 def rank_and_dedupe_books(results: list[SearchResult], query: str) -> list[SearchResult]:
     query_norm = norm(query)
-    deduped: dict[tuple[str, str], SearchResult] = {}
-    for item in results:
-        key = (norm(base_title(item.title)), norm(item.author or ""))
-        current = deduped.get(key)
-        if current is None or book_score(item, query_norm) > book_score(current, query_norm):
-            deduped[key] = item
-    return sorted(
-        deduped.values(),
-        key=lambda item: book_score(item, query_norm),
-        reverse=True,
-    )
+    from app.services.works import group_books
+    return sorted(group_books(results), key=lambda item: book_score(item, query_norm), reverse=True)
 
 
 def book_score(item: SearchResult, query_norm: str) -> tuple[int, int, int, int, int, int, float, int]:

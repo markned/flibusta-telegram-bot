@@ -675,7 +675,7 @@ def test_telegram_author_query_shows_works_and_ambiguous_names_require_choice(mo
     text = " ".join(text for text, _ in message.answers + message.edit_payloads)
     assert "Книги автора" in text
     buttons = [b for row in message.edit_payloads[-1][1]["reply_markup"].inline_keyboard for b in row]
-    assert any(b.callback_data == "book:200" for b in buttons)
+    assert any(b.callback_data.startswith("cbook:") and b.callback_data.endswith(":200") for b in buttons)
     ambiguous = _FakeMessage()
     run(main.send_smart_results(ambiguous, "Толстой"))
     assert "Уточни автора" in " ".join(text for text, _ in ambiguous.answers + ambiguous.edit_payloads)
@@ -847,7 +847,7 @@ def test_collection_card_returns_to_same_page_and_rejects_other_user(monkeypatch
     from dataclasses import replace
     from unittest.mock import AsyncMock
     import app.main as main
-    session=main._create_search_session(501,777,'Литрес',[SearchResult(str(i),'Book','Author') for i in range(20)],title='Литрес',return_to='browse:tops')
+    session=main._create_search_session(501,777,'Литрес',[SearchResult(str(i),f'Book {i}','Author') for i in range(20)],title='Литрес',return_to='browse:tops')
     session=replace(session,page=1)
     main.search_sessions[session.session_id]=session
     details=_book_details_for_card()
@@ -882,3 +882,39 @@ def test_shelf_sections_replace_the_menu_message(monkeypatch):
         callback=_FakeCallback('home')
         run(handler(callback))
         assert callback.message.edit_payloads and not callback.message.answers
+
+
+def test_author_continuation_loads_after_fifth_page_and_keeps_owner(monkeypatch):
+    from dataclasses import replace
+    from app.services.works import AuthorWorksPage
+    import app.main as main
+    class Catalog:
+        calls=[]
+        async def author_works_page(self,author_id,*,offset=0,limit=40):
+            self.calls.append((author_id,offset))
+            return AuthorWorksPage('Автор',[SearchResult(str(i),f'Книга {i:03}','Автор') for i in range(offset,min(113,offset+40))],113,min(113,offset+40),offset+40<113)
+    client=Catalog();monkeypatch.setattr(main,'flibusta',client)
+    session=main._create_search_session(501,777,'author:Автор',[SearchResult(str(i),f'Книга {i:03}','Автор') for i in range(40)],author_id='9',author_offset=40,author_total=113,author_has_more=True)
+    session=replace(session,page=4);main.search_sessions[session.session_id]=session
+    buttons=[b for row in main._search_results_keyboard(session).inline_keyboard for b in row]
+    assert any(b.callback_data==f'page:{session.session_id}:5' for b in buttons)
+    wrong=_FakeCallback(f'page:{session.session_id}:5',user_id=999)
+    run(main.paginate_search(wrong));assert client.calls==[]
+    own=_FakeCallback(f'page:{session.session_id}:5')
+    run(main.paginate_search(own))
+    assert client.calls==[('9',40)]
+    assert main.search_sessions[session.session_id].page==5
+    assert len(main.search_sessions[session.session_id].results)==80
+    assert own.message.edit_payloads and not own.message.answers
+
+
+def test_work_with_only_volumes_opens_selector_without_detail_request(monkeypatch):
+    from unittest.mock import AsyncMock
+    import app.main as main
+    session=main._create_search_session(501,777,'Автор',[SearchResult('1','Роман. Том III','Автор'),SearchResult('2','Роман. Том 1','Автор')])
+    client=type('Client',(),{'details':AsyncMock()})();monkeypatch.setattr(main,'flibusta',client)
+    callback=_FakeCallback(f'wbook:{session.session_id}:1')
+    run(main.show_book(callback))
+    assert client.details.await_count==0
+    buttons=[b for row in callback.message.edit_payloads[-1][1]['reply_markup'].inline_keyboard for b in row]
+    assert buttons[0].callback_data.endswith(':2') and buttons[1].callback_data.endswith(':1')

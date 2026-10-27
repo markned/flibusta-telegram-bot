@@ -10,6 +10,7 @@ from app.branding import BRAND_NAME
 from app.web.device import DeviceProfile
 from app.ui.catalog import genre_groups, group_key
 from app.services.popular_collections import SOURCES
+from app.services.works import group_books, editions, edition_order
 
 
 BASE_CSS = """
@@ -117,6 +118,7 @@ def search_page(
     about_author: bool = False,
     query_choices: tuple[str, ...] = (),
     clarification: str | None = None,
+    work_links=None,
 ) -> str:
     def search_link(label, **options):
         params = {"q": query, "expand": "1" if expanded else "0", **({"mode": "about"} if about_author else {}), **options}
@@ -138,9 +140,9 @@ def search_page(
         approximate = [book for book in shown if book not in matches]
         if matches:
             heading = f"Книги автора: {authors[0].name}" if author_query and len(authors) == 1 else "Книги об авторе" if about_author else "Книги"
-            content += f"<h2>{escape(heading)}</h2>" + book_list(matches)
+            content += f"<h2>{escape(heading)}</h2>" + book_list(matches,work_links=work_links)
         if approximate:
-            content += "<h2>Приблизительные совпадения</h2>" + book_list(approximate)
+            content += "<h2>Приблизительные совпадения</h2>" + book_list(approximate,work_links=work_links)
         if authors:
             heading = "Уточни автора" if author_query and len(authors) > 1 else "Авторы"
             content += f"<h2>{heading}</h2>" + author_list(authors[page_number * 12:(page_number + 1) * 12])
@@ -172,13 +174,18 @@ def search_page(
     )
 
 
-def book_list(books: list[SearchResult], *, context="") -> str:
+def book_list(books: list[SearchResult], *, context="", work_links=None) -> str:
     items = []
     for book in books:
-        author = f'<div class="muted">{escape(book.author)}</div>' if book.author else ""
+        href = (work_links or {}).get(
+            book.book_id, f"/book/{quote_plus(book.book_id)}{context}"
+        )
+        author = (
+            f'<div class="muted">{escape(book.author)}</div>' if book.author else ""
+        )
         items.append(
             '<article class="card">'
-            f'<a class="card-title" href="/book/{quote_plus(book.book_id)}{escape(context, quote=True)}">{escape(book.title)}</a>'
+            f'<a class="card-title" href="{escape(href, quote=True)}">{escape(book.title)}</a>'
             f"{author}</article>"
         )
     return "".join(items)
@@ -204,6 +211,7 @@ def book_page(
     cover_url: str | None = None,
     return_url: str | None = None,
     random_next: str | None = None,
+    editions_url: str | None = None,
 ) -> str:
     notice_html = f'<div class="notice">{escape(notice)}</div>' if notice else ""
     cover = ""
@@ -269,6 +277,8 @@ def book_page(
         fav_action = "remove" if favorite else "add"
         fav_label = "Удалить из избранного" if favorite else "Добавить в избранное"
         actions.append(_post_button(f"/favorite/{fav_action}/{details.book_id}", fav_label))
+    if editions_url:
+        actions.append(f'<p><a class="button" href="{escape(editions_url,quote=True)}">Издания и тома</a></p>')
     if return_url:
         label = "← Каталог" if random_next else "← В подборку"
         actions.append(f'<p><a class="button" href="{escape(return_url, quote=True)}">{label}</a></p>')
@@ -311,9 +321,9 @@ def delivery_success_page(details: BookDetails, *, provider: str) -> str:
     )
 
 
-def simple_books_page(title: str, books: list[SearchResult], empty_text: str) -> str:
+def simple_books_page(title: str, books: list[SearchResult], empty_text: str, *, work_links=None) -> str:
     body = f"<h2>{escape(title)}</h2>"
-    body += book_list(books) if books else f"<p>{escape(empty_text)}</p>"
+    body += book_list(books,work_links=work_links) if books else f"<p>{escape(empty_text)}</p>"
     return page(title, body, authenticated=True)
 
 
@@ -360,7 +370,7 @@ def _post_button(action: str, label: str) -> str:
     )
 
 
-def browse_page(title, books, genres, *, page_number=0, genre=None, notice="", source=None, view="tops", group=None):
+def browse_page(title, books, genres, *, page_number=0, genre=None, notice="", source=None, view="tops", group=None,work_links=None):
     def link(label, **params):
         return f'<p><a class="button" href="/browse?{escape(urlencode(params),quote=True)}">{escape(label)}</a></p>'
     content = ""
@@ -384,7 +394,7 @@ def browse_page(title, books, genres, *, page_number=0, genre=None, notice="", s
         pages=max(1,(len(books)+7)//8);page_number=min(page_number,pages-1)
         params={**({'source':source} if source else {}),**({'genre':genre} if genre else {})}
         context='?'+urlencode({'collection':source or 'genre','collection_page':page_number,**({'genre':genre} if genre else {})})
-        content+=book_list(books[page_number*8:(page_number+1)*8],context=context) if books else '<p>Подборка пока недоступна. Попробуй позже.</p>'
+        content+=book_list(books[page_number*8:(page_number+1)*8],context=context,work_links=work_links) if books else '<p>Подборка пока недоступна. Попробуй позже.</p>'
         content+=link('← Популярное') if source else link('← Жанры',view='genres')
     elif view == 'random':
         pages=1;content='<p>Пока нет книг для случайного выбора.</p>'
@@ -400,3 +410,55 @@ def browse_page(title, books, genres, *, page_number=0, genre=None, notice="", s
                 content+=f'<a class="button" href="/browse?{escape(urlencode({**params,"page":number}),quote=True)}">{label}</a> '
         content+='</p>'
     return page(title,f'<h2>{escape(title)}</h2>{content}',authenticated=True)
+
+
+def author_works_page(name, books, author_id, page_number, total, links):
+    pages = max(1, (total + 7) // 8)
+    content = (
+        book_list(books, work_links=links)
+        if books
+        else "<p>Произведения не найдены.</p>"
+    )
+    nav = []
+    if page_number:
+        nav.append(
+            f'<a class="button" href="/author/{author_id}?page={page_number - 1}">← Назад</a>'
+        )
+    nav.append(f"<span>{page_number + 1}/{pages}</span>")
+    if (page_number + 1) * 8 < total:
+        nav.append(
+            f'<a class="button" href="/author/{author_id}?page={page_number + 1}">Дальше →</a>'
+        )
+    return page(
+        f"Книги автора: {name}",
+        f"<h2>{escape(name)}</h2>{content}<p>{' '.join(nav)}</p>",
+        authenticated=True,
+    )
+
+
+def editions_page(work, base, return_url, page_number=0):
+    refs = sorted(editions(work), key=edition_order)
+    pages = max(1, (len(refs) + 7) // 8)
+    page_number = min(page_number, pages - 1)
+    content = "".join(
+        f'<p><a class="button" href="{base}?edition={quote_plus(ref.book_id)}">{index}. {escape(ref.title)}</a></p>'
+        for index, ref in enumerate(
+            refs[page_number * 8 : (page_number + 1) * 8], start=page_number * 8 + 1
+        )
+    )
+    nav = []
+    if page_number:
+        nav.append(
+            f'<a class="button" href="{base}?editions=1&amp;page={page_number - 1}">← Назад</a>'
+        )
+    nav.append(f"<span>{page_number + 1}/{pages}</span>")
+    if page_number + 1 < pages:
+        nav.append(
+            f'<a class="button" href="{base}?editions=1&amp;page={page_number + 1}">Дальше →</a>'
+        )
+    content += f'<p>{" ".join(nav)}</p><p><a class="button" href="{escape(return_url, quote=True)}">← К произведениям</a></p>'
+    return page(
+        work.title,
+        f"<h2>{escape(work.title)}</h2><p>Издания и тома</p>{content}",
+        authenticated=True,
+    )

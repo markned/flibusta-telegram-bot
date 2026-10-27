@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import logging
 import re
 from time import monotonic
@@ -59,6 +59,7 @@ class CachedFlibustaClient:
         self._inflight: dict[str, asyncio.Task] = {}
         self._max_inflight = 64
         self._waiters: dict[asyncio.Task, int] = {}
+        self._author_catalog_lock = asyncio.Lock()
 
     async def close(self) -> None:
         tasks = list(self._inflight.values())
@@ -112,6 +113,70 @@ class CachedFlibustaClient:
                 [AuthorResult(**row) for row in pair[1]],
             ),
             source_timeout_seconds=self.source_timeout_seconds,
+        )
+
+    async def author_works_page(
+        self, author_id: str, *, offset: int = 0, limit: int = 40
+    ):
+        from app.services.works import AuthorWorksPage, group_books
+
+        if not author_id.isdigit() or offset < 0 or not 1 <= limit <= 40:
+            raise ValueError("Invalid author page")
+        name, books = await self._author_catalog(author_id)
+        works = [
+            replace(w, source_author_id=author_id)
+            for w in group_books(books, alphabetical=True)
+        ]
+        end = min(len(works), offset + limit)
+        return AuthorWorksPage(
+            name, works[offset:end], len(works), end, end < len(works)
+        )
+
+    async def _author_catalog(self, author_id):
+        async def load():
+            async with self._author_catalog_lock:
+                return await self.client.author_books(author_id, limit=None)
+
+        return await self._cached(
+            "author_books",
+            f"{author_id}:catalog-v3",
+            load,
+            lambda pair: (pair[0], [SearchResult(**row) for row in pair[1]]),
+            source_timeout_seconds=self.source_timeout_seconds,
+        )
+
+    async def complete_work(self, work):
+        from app.services.works import group_books, editions, identity
+        from app.services.author_names import names_match
+
+        if not work.source_author_id or not work.source_author_id.isdigit():
+            return work
+        name, books = await self._author_catalog(work.source_author_id)
+        if work.author and not names_match(work.author, name):
+            raise FlibustaError("Не удалось подтвердить автора изданий.")
+        candidate = next(
+            (
+                b
+                for b in group_books(books)
+                if identity(b.title) == identity(work.title)
+            ),
+            None,
+        )
+        if candidate is None:
+            return work
+        merged = group_books(
+            [
+                SearchResult(
+                    e.book_id, e.title, name, source_author_id=work.source_author_id
+                )
+                for e in (*editions(work), *editions(candidate))
+            ]
+        )[0]
+        return replace(
+            merged,
+            book_id=work.book_id,
+            editions=editions(merged),
+            source_author_id=work.source_author_id,
         )
 
     async def author_books(self, author_id: str, limit: int = 40):

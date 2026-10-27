@@ -44,6 +44,10 @@ class SearchOutcome:
     about_author: bool = False
     query_choices: tuple[str, ...] = ()
     clarification: str | None = None
+    author_id: str | None = None
+    author_offset: int = 0
+    author_total: int | None = None
+    author_has_more: bool = False
 
 
 def outcome_notice(outcome: SearchOutcome) -> str:

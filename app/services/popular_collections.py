@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -214,7 +214,7 @@ class PopularCollections:
                             await self.repo.set(
                                 "collection:" + source,
                                 "collection",
-                                [asdict(b) for b in books[:100]],
+                                [{"book_id":b.book_id,"title":b.title,"author":b.author} for b in books[:100]],
                                 86400,
                             )
                         logger.info(

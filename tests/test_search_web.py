@@ -54,7 +54,7 @@ def test_web_expansion_and_pagination_preserve_query_and_show_all_results(tmp_pa
         async def search(self, query, *, expanded=False):
             self.expansions.append(expanded)
             return SearchOutcome(SearchPlan(query, query, SearchMode.EXACT, (query,), ()),
-                                 [SearchResult(str(n), "Дюна", "Фрэнк Герберт") for n in range(25)],
+                                 [SearchResult(str(n), f"Дюна {n}", "Фрэнк Герберт") for n in range(25)],
                                  [AuthorResult(str(n), f"Автор {n}") for n in range(15)], (query,),
                                  has_more=not expanded)
 
@@ -222,3 +222,59 @@ def test_collection_return_url_preserves_page_and_cannot_redirect_offsite():
     assert _collection_return(SimpleNamespace(query={'collection':'litres','collection_page':'3'})) == '/browse?page=3&source=litres'
     assert _collection_return(SimpleNamespace(query={'collection':'https://evil.test'})) is None
     assert _collection_return(SimpleNamespace(query={'collection':'genre','genre':'detective','collection_page':'1'})) == '/browse?page=1&genre=detective'
+
+
+def test_web_work_default_edition_selection_and_owner_isolation(tmp_path):
+    from app.flibusta import BookDetails
+    class Service:
+        async def search(self,query):
+            return SearchOutcome(SearchPlan(query,query,SearchMode.EXACT,(query,),()),
+                [SearchResult('1','Книга','Автор'),SearchResult('2','Книга [litres]','Автор'),SearchResult('3','Книга. Том I','Автор')],[],(query,))
+    class Catalog:
+        seen=[]
+        async def details(self,book_id):
+            self.seen.append(book_id)
+            return BookDetails(book_id,'Книга. Том I' if book_id=='3' else 'Книга',['Автор'],[],[],[],[],None,None,'Описание',[],'https://catalog.test/b/'+book_id)
+    async def scenario():
+        catalog=Catalog()
+        async with browser(tmp_path,Service(),catalog) as client:
+            soup=BeautifulSoup(await (await client.get('/search?q=Книга')).text(),'html.parser')
+            links=soup.select('a.card-title')
+            assert len(links)==1 and links[0]['href'].startswith('/work/')
+            target=links[0]['href']
+            card=BeautifulSoup(await (await client.get(target)).text(),'html.parser')
+            assert catalog.seen==['1']
+            choice=card.find('a',string='Издания и тома')
+            selector=BeautifulSoup(await (await client.get(choice['href'])).text(),'html.parser')
+            third=next(a for a in selector.find_all('a') if 'edition=3' in a.get('href',''))
+            await client.get(third['href'])
+            assert catalog.seen==['1','3']
+            assert (await client.get(target+'?edition=999')).status==400
+            from app.web.app import DEPS_KEY
+            deps=client.server.app[DEPS_KEY]
+            await deps.access_repo.ensure_user(43,'approved')
+            code=await deps.web_access_repo.create_pairing_code(43)
+            client.session.cookie_jar.clear()
+            await client.post('/pair',data={'code':code})
+            assert (await client.get(target)).status==410
+            assert catalog.seen==['1','3']
+    asyncio.run(scenario())
+
+
+def test_web_author_catalog_continues_after_fifth_page(tmp_path):
+    from app.services.works import AuthorWorksPage
+    class Catalog:
+        calls=[]
+        async def author_works_page(self,author_id,*,offset=0,limit=40):
+            self.calls.append((offset,limit))
+            return AuthorWorksPage('Автор',[SearchResult(str(i),f'Книга {i:03}','Автор') for i in range(offset,min(113,offset+limit))],113,min(113,offset+limit),offset+limit<113)
+    async def scenario():
+        catalog=Catalog()
+        async with browser(tmp_path,object(),catalog) as client:
+            soup=BeautifulSoup(await (await client.get('/author/9?page=4')).text(),'html.parser')
+            next_page=soup.find('a',string='Дальше →')
+            assert next_page['href']=='/author/9?page=5'
+            following=await (await client.get(next_page['href'])).text()
+            assert '/book/40' in following and '6/15' in following
+            assert catalog.calls==[(32,8),(40,8)]
+    asyncio.run(scenario())

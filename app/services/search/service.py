@@ -299,7 +299,12 @@ class SearchService:
             return outcome
         author = outcome.authors[0]
         try:
-            page_name, books = await self._request("author_books", author.author_id, limit=self.book_limit)
+            page = None
+            if hasattr(self.client, "author_works_page"):
+                page = await self._request("author_works_page", author.author_id)
+                page_name, books = page.name, page.books
+            else:
+                page_name, books = await self._request("author_books", author.author_id, limit=self.book_limit)
         except Exception:
             return outcome
         if page_name and not author_name_matches(author.name, page_name):
@@ -307,11 +312,16 @@ class SearchService:
             if status is not None:
                 status.source_unavailable = True
             return outcome
-        works = [SearchResult(book.book_id, book.title, book.author or page_name or author.name)
+        works = [replace(book, author=book.author or page_name or author.name)
                  for book in books
                  if not book.author or author_name_matches(author.name, book.author)]
         self._remember(plan, works, outcome.authors)
-        return replace(outcome, books=works)
+        from app.services.works import group_books
+        return replace(outcome, books=group_books(works, alphabetical=True),
+                       author_id=author.author_id if page else None,
+                       author_offset=page.next_offset if page else 0,
+                       author_total=page.total if page else None,
+                       author_has_more=page.has_more if page else False)
 
     async def search_about_author(self, query: str) -> SearchOutcome:
         author = canonical_author_query(query)
@@ -417,7 +427,7 @@ class SearchService:
                 if isinstance(value, Exception):
                     raise value
                 return value
-            maximum = {"search": 2 + self.max_fallback_queries, "search_authors": 4, "author_books": 2}.get(method)
+            maximum = {"search": 2 + self.max_fallback_queries, "search_authors": 4, "author_books": 2, "author_works_page": 2}.get(method)
             if maximum is not None and state.request_counts.get(method, 0) >= maximum:
                 return ("", []) if method == "author_books" else []
             state.request_counts[method] = state.request_counts.get(method, 0) + 1
@@ -456,7 +466,9 @@ class SearchService:
                 status.source_unavailable = True
                 outcome = SearchOutcome(state.plan, state.books, state.authors, tuple(state.used), partial=True, has_more=True)
             plan = outcome.plan
-            books = rank_and_dedupe_books(outcome.books, plan.title or plan.cleaned_query)[:self.book_limit]
+            from app.services.works import group_books
+            books = (group_books(outcome.books, alphabetical=True) if plan.mode == SearchMode.AUTHOR
+                     else rank_and_dedupe_books(outcome.books, plan.title or plan.cleaned_query)[:self.book_limit])
             approximate = bool(books and plan.mode != SearchMode.AUTHOR and not outcome.about_author
                                and not title_matches(plan.title or plan.cleaned_query, books[0].title))
             return replace(
