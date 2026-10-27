@@ -5,7 +5,7 @@ from enum import Enum
 import re
 
 from app.services.query_analyzer import analyze_query
-from app.services.author_names import (KNOWN_AUTHOR_NAMES, canonical_author_query, is_known_author_query, known_surnames, name_tokens, suggest_author_query)
+from app.services.author_names import (KNOWN_AUTHOR_NAMES, canonical_author_query, is_known_author_query, known_surnames, name_tokens, author_query_choices)
 from app.services.search_logic import clean_query, norm
 
 
@@ -142,7 +142,7 @@ def route_intent(query: str) -> IntentDecision:
     author_query = author_prefix.group(1) if author_prefix else cleaned
     canonical = canonical_author_query(author_query)
     single_surname = len(author_query.split()) == 1 and canonical in (KNOWN_SURNAMES | known_surnames())
-    typo = suggest_author_query(author_query)
+    typo = author_query_choices(author_query)
     if ((author_prefix and 1 <= len(author_query.split()) <= 4)
             or is_known_author_query(author_query) or single_surname or typo):
         return _decision(

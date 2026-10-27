@@ -44,7 +44,27 @@ def author_queries(query):
             if len(words) > 3
             else [anchor, words[0]]
         )
-    return tuple(dict.fromkeys(variants))[:3]
+
+    def anchor_prefix(word):
+        return word[:4] if len(word) >= 5 else word[:3] if len(word) == 4 else word
+
+    if len(words) == 2:
+        variants = [
+            query,
+            anchor_prefix(words[-1]),
+            anchor_prefix(words[0]),
+            *variants[1:],
+        ]
+    else:
+        long_words = [word for word in words if len(word) >= 5 and word.isalpha()]
+        if long_words:
+            variants.insert(
+                1,
+                anchor_prefix(
+                    words[-1] if len(words[-1]) >= 5 else max(long_words, key=len)
+                ),
+            )
+    return tuple(dict.fromkeys(variants))[:4]
 
 
 def probe_worthwhile(query):
@@ -157,9 +177,12 @@ def correction(query, books, authors):
         if split and not split[0] and split[1]:
             choices.setdefault(norm(author.name), author.name)
     for book in books:
-        if title_relevant(query, book.title, min_fuzzy_length=3) and norm(
-            query
-        ) != norm(book.title):
+        from app.services.fuzzy_query import full_query_supported
+
+        if (
+            title_relevant(query, book.title, min_fuzzy_length=3)
+            or full_query_supported(query, book.title)
+        ) and norm(query) != norm(book.title):
             choices.setdefault(norm(book.title), book.title)
         if book.author:
             split = split_name(query, book.author, fuzzy=True)

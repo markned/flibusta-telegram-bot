@@ -133,7 +133,7 @@ def search_page(
         content += f"<p>{escape(clarification)}</p>"
     elif not books and not authors and not suggested_query:
         content += ("<p>Автор не найден. Проверь имя или выбери другой способ поиска.</p>" if author_query
-                    else "<p>Ничего не нашлось. Попробуй сократить запрос.</p>")
+                    else "<p>Не удалось уверенно сопоставить весь запрос. Уточни название или автора.</p>")
     else:
         shown = books[page_number * 20:(page_number + 1) * 20]
         matches = shown if author_query or about_author else [book for book in shown if title_matches(match_query or query, book.title)]

@@ -1456,6 +1456,15 @@ async def send_author_results(message: Message, query: str, *, show_no_results: 
             except Exception:
                 pass
         return False
+    if not outcome.authors and (outcome.suggested_query or outcome.query_choices):
+        if outcome.suggested_query:
+            text=f"Вы имели в виду: <b>{escape(outcome.suggested_query)}</b>?"
+            markup=_author_intent_keyboard(message,query,outcome.suggested_query)
+        else:
+            text=escape(outcome.clarification or "Уточни автора.")
+            markup=_query_choice_keyboard(message,outcome.query_choices)
+        await _send_or_edit(message,progress,text,reply_markup=markup)
+        return False
     if not outcome.authors:
         if show_no_results:
             await _send_no_results(message, query, progress=progress)
@@ -1469,6 +1478,20 @@ async def send_author_results(message: Message, query: str, *, show_no_results: 
     log_user_action(message.from_user, message.chat.id, "author_search_ok", query=query, authors=len(outcome.authors), duration=elapsed(started_at))
     await _send_or_edit(message, progress, _author_results_text(session), reply_markup=_author_results_keyboard(session))
     return True
+
+
+def _query_choice_keyboard(message, choices):
+    kb = InlineKeyboardBuilder()
+    for choice in choices[:4]:
+        session = _create_search_session(
+            message.from_user.id, message.chat.id, choice, []
+        )
+        kb.row(
+            InlineKeyboardButton(
+                text=choice[:64], callback_data=f"authorfix:{session.session_id}"
+            )
+        )
+    return kb.as_markup()
 
 
 def _author_intent_keyboard(message: Message, query: str, suggestion=None, base=None):
@@ -1532,12 +1555,8 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
 
     if outcome.query_choices or (outcome.suggested_query and plan.mode != SearchMode.AUTHOR):
         choices = outcome.query_choices or (outcome.suggested_query,)
-        kb = InlineKeyboardBuilder()
-        for choice in choices[:4]:
-            session = _create_search_session(message.from_user.id, message.chat.id, choice, [])
-            kb.row(InlineKeyboardButton(text=choice[:64], callback_data=f"authorfix:{session.session_id}"))
         text = outcome.clarification or "Вы имели в виду:"
-        await _send_or_edit(message, progress, notice + escape(text), reply_markup=kb.as_markup())
+        await _send_or_edit(message, progress, notice + escape(text), reply_markup=_query_choice_keyboard(message,choices))
         return False
 
     books = outcome.books
@@ -1765,7 +1784,7 @@ async def _send_no_results(message: Message, query: str, *, progress: Message | 
     await _send_or_edit(
         message,
         progress,
-        f"<b>Ничего не нашёл</b>\nЗапрос: <b>{escape(query)}</b>\n\nМожно попробовать короче или искать как автора.",
+        f"<b>Ничего не нашёл</b>\nЗапрос: <b>{escape(query)}</b>\n\nНе удалось уверенно сопоставить весь запрос. Уточни автора или название книги.",
         reply_markup=kb.as_markup(),
     )
 

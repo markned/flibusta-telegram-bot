@@ -152,28 +152,16 @@ def one_edit_apart(left: str, right: str) -> bool:
     return any(longer[:i] + longer[i + 1 :] == shorter for i in range(len(longer)))
 
 
-def suggest_author_query(query: str, candidates=()) -> str | None:
+def author_query_choices(query: str, candidates=()) -> tuple[str, ...]:
     wanted = name_tokens(query)
     names = list(candidates) + list(dict.fromkeys(KNOWN_AUTHOR_NAMES.values()))
     if len(wanted) == 1:
         names += sorted(known_surnames())
-    plausible = {}
-    for name in names:
-        actual = name_tokens(name)
-        if len(wanted) != len(actual):
-            continue
-        # Either name order is allowed. Two changed words are considered only
-        # for a two-token name with a sufficiently long surname, and each word
-        # must be at most one edit away. This produces a suggestion, never IDs.
-        orders = (wanted, wanted[::-1]) if len(wanted) == 2 else (wanted,)
-        for ordered in orders:
-            differences = [(a, b) for a, b in zip(ordered, actual) if a != b]
-            two_name_typos = (
-                len(actual) == 2 and len(actual[-1]) >= 5 and len(differences) == 2
-            )
-            if (len(differences) == 1 or two_name_typos) and all(
-                one_edit_apart(a, b) for a, b in differences
-            ):
-                plausible.setdefault(actual, name)
-                break
-    return next(iter(plausible.values())) if len(plausible) == 1 else None
+    from app.services.fuzzy_query import author_choices
+
+    return author_choices(" ".join(wanted), names)
+
+
+def suggest_author_query(query: str, candidates=()) -> str | None:
+    choices = author_query_choices(query, candidates)
+    return choices[0] if len(choices) == 1 else None
