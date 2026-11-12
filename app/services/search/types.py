@@ -56,6 +56,8 @@ def outcome_notice(outcome: SearchOutcome) -> str:
         from datetime import datetime
         date = datetime.fromisoformat(outcome.stale_at).strftime("%d.%m.%Y %H:%M UTC")
         return f"Результаты из кэша от {date}. Источник временно недоступен."
+    if outcome.partial and not outcome.source_unavailable:
+        return "Показаны найденные результаты. Проверка остальных вариантов не завершена."
     if outcome.source_unavailable or outcome.partial:
         return "Источник временно недоступен. Показаны доступные результаты; поиск мог завершиться не полностью."
     return ""

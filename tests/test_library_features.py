@@ -606,7 +606,7 @@ def test_telegram_search_marks_approximate_stale_results(monkeypatch):
     import app.main as main
 
     class Service:
-        async def search(self, query):
+        async def search(self, query, *, on_progress=None):
             return replace(_outcome(query, mode=SearchMode.AUTHOR_TITLE,
                                     books=[SearchResult("10", "Дюны", "Фрэнк Герберт")]),
                            approximate=True, source_unavailable=True,
@@ -634,6 +634,10 @@ def test_coalesced_stale_provenance_is_request_local(tmp_path):
             if query == "Дюна":
                 await asyncio.Event().wait()
             return [SearchResult("11", "Идиот", "Федор Достоевский")]
+
+        async def search_authors(self, query, limit=20):
+            # Healthy empty author endpoint, not an AttributeError source failure.
+            return []
 
         async def close(self):
             pass
@@ -802,7 +806,7 @@ def test_catalog_hints_read_only_bounded_fresh_public_metadata(tmp_path):
 def test_telegram_generic_clarification_uses_owned_confirmation_sessions(monkeypatch):
     import app.main as main
     class Service:
-        async def search(self, query):
+        async def search(self, query, *, on_progress=None):
             return SearchOutcome(SearchPlan(query, query, SearchMode.EXACT, (query,), ()), [], [], (),
                                  query_choices=('книги Умберто Эко', '«умберто эко»'), clarification='Это автор или название книги?')
     monkeypatch.setattr(main, 'search_service', Service())
@@ -925,7 +929,7 @@ def test_screenshot_two_typos_offer_owned_confirmation_not_unrelated_books(monke
     from app.services.search import SearchService
     class Catalog:
         async def search(self,*args,**kwargs): raise AssertionError('must not search fragments')
-        async def search_authors(self,*args,**kwargs): raise AssertionError('confirmation comes before source lookup')
+        async def search_authors(self,*args,**kwargs): return []
     monkeypatch.setattr(main,'search_service',SearchService(Catalog(),book_limit=40,author_limit=20))
     main.search_timestamps.clear()
     message=_FakeMessage()

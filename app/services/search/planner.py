@@ -30,6 +30,11 @@ def build_search_plan(query: str, *, max_fallback_queries: int = 2) -> SearchPla
     if keyboard_variant and keyboard_variant.casefold() != cleaned.casefold():
         primary.append(keyboard_variant)
 
+    from app.services.transliteration import latin_to_cyrillic
+    translit = latin_to_cyrillic(cleaned)
+    if translit:
+        primary.append(translit)
+
     fallback: list[str] = []
     if mode in {SearchMode.EXACT, SearchMode.FALLBACK}:
         words = cleaned.split()

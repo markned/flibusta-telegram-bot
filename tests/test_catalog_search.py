@@ -71,21 +71,22 @@ def test_catalog_metadata_separates_unlisted_author_and_title(query):
     assert result.plan.author and result.plan.title
 
 
-def test_unknown_author_typo_uses_other_name_anchor_and_requires_confirmation():
+def test_unknown_author_typo_uses_catalog_identity_and_returns_works():
     result = asyncio.run(engine(Catalog()).search("умберто экоо"))
     assert result.suggested_query == "Умберто Эко"
-    assert not result.books
+    assert result.books[0].book_id == "100"
+    assert result.authors[0].author_id == "10"
 
 
-def test_author_title_collision_asks_one_question():
+def test_author_title_collision_returns_both_groups():
     class Client(Catalog):
         async def search(self, query, limit=40):
             return [SearchResult("102", "Умберто Эко", "Другой писатель")]
 
     result = asyncio.run(engine(Client()).search("умберто эко"))
-    assert not result.books
-    assert "книги Умберто Эко" in result.query_choices
-    assert "«умберто эко»" in result.query_choices
+    assert result.books[0].book_id == "102"
+    assert result.authors[0].author_id == "10"
+    assert not result.query_choices
 
 
 def test_title_typo_can_use_bounded_previously_observed_catalog_hints():
@@ -143,7 +144,7 @@ def test_collision_is_independent_of_source_completion_order():
             return [SearchResult("102", "Умберто Эко", "Другой писатель")]
 
     result = asyncio.run(engine(Client()).search("умберто эко"))
-    assert not result.books and result.query_choices
+    assert result.books[0].book_id == "102" and result.authors and not result.query_choices
 
 
 def test_request_budget_stays_bounded_on_catalog_miss():
