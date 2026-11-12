@@ -635,6 +635,10 @@ def test_coalesced_stale_provenance_is_request_local(tmp_path):
                 await asyncio.Event().wait()
             return [SearchResult("11", "Идиот", "Федор Достоевский")]
 
+        async def search_authors(self, query, limit=20):
+            # Healthy empty author endpoint, not an AttributeError source failure.
+            return []
+
         async def close(self):
             pass
 
