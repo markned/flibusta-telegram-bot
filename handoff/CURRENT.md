@@ -144,3 +144,15 @@ These are development-only; production code and requirements are unchanged.
   edition/volume labels. HTML search highlighting no longer splits words; search
   cache keys use text-v2. Query/request/time/memory bounds remain in place.
 - General validation and limitations: `docs/fuzzy-search.md`.
+
+## Automatic search (2026-11-12)
+
+Natural queries now return validated works for a unique catalog-backed author
+correction without confirmation; unverified hints and explicit power-user author
+correction keep their confirmation path. Literal title/author collisions display
+both groups, including known natural names. Full-query book evidence rejects weak
+cross-person token matches. Parallel author probes use surname anchors and one
+bounded transliteration variant. Telegram publishes useful results incrementally;
+total search is capped at 15s, with partial notices when optional checks stop.
+Validation and live metadata examples: `docs/automatic-search.md`. This section
+supersedes the earlier default-natural-query confirmation/0.75s probe behavior.

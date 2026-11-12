@@ -210,7 +210,7 @@ def full_query_supported(query, title, author=None):
                 and actual.isalpha()
             ):
                 score = 1 - edit_distance(word, actual) / max(len(word), len(actual))
-                if score < (0.75 if is_title else 0.63):
+                if score < 0.75:
                     continue
             else:
                 continue

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
-from typing import Protocol
+from typing import Protocol, Callable, Awaitable
 
 from app.services.search.context import SearchStatus, search_status
 from app.services.author_names import canonical_author_query, names_match, suggest_author_query, author_query_choices
@@ -41,6 +41,8 @@ class _SearchRun:
     request_counts: dict = field(default_factory=dict)
     observed: dict = field(default_factory=dict)
     observed_authors: dict = field(default_factory=dict)
+    on_progress: Callable[[SearchOutcome], Awaitable[None]] | None = None
+    progress_key: tuple = ()
 
 
 _search_run: ContextVar[_SearchRun | None] = ContextVar("search_run", default=None)
@@ -59,22 +61,22 @@ class SearchService:
         self.client = client
         self.book_limit = book_limit
         self.author_limit = author_limit
-        self.timeout_seconds = timeout_seconds
+        self.timeout_seconds = min(timeout_seconds, 15)
         self.max_fallback_queries = max_fallback_queries
 
-    async def search(self, query: str, *, expanded: bool = False) -> SearchOutcome:
+    async def search(self, query: str, *, expanded: bool = False, on_progress=None) -> SearchOutcome:
         plan = build_search_plan(query, max_fallback_queries=self.max_fallback_queries)
         if plan.mode == SearchMode.UNSUPPORTED_TOPIC:
             return SearchOutcome(plan, [], [], ())
         if plan.mode == SearchMode.AUTHOR_TITLE:
-            return await self._within_deadline(self._search_author_title_with_fallback(plan), plan, expanded=expanded)
+            return await self._within_deadline(self._search_author_title_with_fallback(plan), plan, expanded=expanded, on_progress=on_progress)
         if plan.mode == SearchMode.AUTHOR:
-            return await self._within_deadline(self._search_author_intent(plan), plan, expanded=expanded)
+            return await self._within_deadline(self._search_author_intent(plan), plan, expanded=expanded, on_progress=on_progress)
         if plan.catalog_lookup:
-            return await self._within_deadline(self._search_catalog(plan), plan, expanded=expanded)
+            return await self._within_deadline(self._search_catalog(plan), plan, expanded=expanded, on_progress=on_progress)
         if plan.mode == SearchMode.EXACT:
-            return await self._within_deadline(self._search_exact(plan), plan, expanded=expanded)
-        return await self._within_deadline(self._search_general(plan), plan, expanded=expanded)
+            return await self._within_deadline(self._search_exact(plan), plan, expanded=expanded, on_progress=on_progress)
+        return await self._within_deadline(self._search_general(plan), plan, expanded=expanded, on_progress=on_progress)
 
     async def search_books(self, query: str) -> SearchOutcome:
         plan = build_search_plan(query, max_fallback_queries=self.max_fallback_queries)
@@ -112,33 +114,57 @@ class SearchService:
 
     async def _collect_authors(self, query):
         candidates = {}
-        for variant in author_queries(query):
-            rows = await self._request(
-                "search_authors", variant, limit=self.author_limit
-            )
+        variants = author_queries(query)
+
+        async def collect(variant):
+            try:
+                async with asyncio.timeout(min(7, max(.02, self.timeout_seconds * .6))):
+                    rows = await self._request("search_authors", variant, limit=self.author_limit)
+            except (FlibustaError, TimeoutError):
+                status = search_status.get()
+                if status is not None:
+                    status.source_unavailable = True
+                return
             for item in rows:
                 candidates[item.author_id] = item
                 state = _search_run.get()
-                if (
-                    state is not None
-                    and len(state.observed_authors) < self.author_limit * 3
-                ):
+                if state is not None and len(state.observed_authors) < self.author_limit * 3:
                     state.observed_authors.setdefault(item.author_id, item)
-            from app.services.fuzzy_query import author_choices
 
-            if any(
-                author_name_matches(query, item.name) for item in candidates.values()
-            ) or author_choices(query, [item.name for item in candidates.values()]):
+        for offset in range(0, len(variants), 2):
+            await asyncio.gather(*(collect(v) for v in variants[offset:offset + 2]))
+            from app.services.fuzzy_query import author_choices
+            if any(author_name_matches(query, item.name) for item in candidates.values()) or author_choices(query, [a.name for a in candidates.values()]):
                 break
-        return list(candidates.values())[: self.author_limit * 3]
+        return list(candidates.values())[:self.author_limit * 3]
+
+    async def _publish(self, plan, books, authors=()):
+        state = _search_run.get()
+        if state is None or state.on_progress is None or not (books or authors):
+            return
+        key = (tuple(b.book_id for b in books), tuple(a.author_id for a in authors))
+        if key == state.progress_key:
+            return
+        state.progress_key = key
+        try:
+            async with asyncio.timeout(1):
+                await state.on_progress(SearchOutcome(plan, books, list(authors), tuple(state.used), partial=True))
+        except Exception:
+            # An optional progress update must not discard catalog results.
+            pass
 
     async def _probe_authors(self, plan):
         # An optional classifier must not contaminate required-source provenance.
         status = SearchStatus()
         token = search_status.set(status)
         try:
-            async with asyncio.timeout(min(0.75, max(0.01, self.timeout_seconds / 3))):
-                return await self._collect_authors(plan.cleaned_query), status
+            async with asyncio.timeout(min(8.5, max(0.01, self.timeout_seconds * .7))):
+                authors = await self._collect_authors(plan.cleaned_query)
+                exact = [a for a in authors if author_name_matches(plan.cleaned_query, a.name)]
+                if exact:
+                    self._remember(plan, [], exact)
+                    await self._publish(author_plan(plan, plan.cleaned_query), [], exact)
+                return authors, status
         except (Exception, TimeoutError):
             state = _search_run.get()
             return list(state.observed_authors.values()) if state else [], status
@@ -151,8 +177,8 @@ class SearchService:
         state.books.clear()
         state.authors.clear()
 
-    async def _resolved_author(self, plan, authors, status):
-        resolved = author_plan(plan, plan.cleaned_query)
+    async def _resolved_author(self, plan, authors, status, *, suggestion=None):
+        resolved = author_plan(plan, suggestion or plan.cleaned_query)
         self._adopt(resolved)
         self._remember(resolved, [], authors)
         provenance = search_status.get()
@@ -160,7 +186,8 @@ class SearchService:
         if status.stale_at:
             provenance.stale_at = status.stale_at
         outcome = SearchOutcome(resolved, [], authors, tuple(_search_run.get().used))
-        return await self._author_works(resolved, outcome)
+        outcome = await self._author_works(resolved, outcome)
+        return replace(outcome, suggested_query=suggestion)
 
     async def _search_catalog(self, plan):
         book_task = asyncio.create_task(self._search_books_only(plan))
@@ -172,6 +199,19 @@ class SearchService:
         )
         tasks = [book_task] + ([probe_task] if probe_task else [])
         try:
+            if probe_task:
+                done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                if probe_task in done and not book_task.done():
+                    candidates, status = probe_task.result()
+                    authors = [a for a in candidates if author_name_matches(plan.cleaned_query, a.name)]
+                    if authors:
+                        # Give a nearly completed exact-title hit time to expose a collision.
+                        await asyncio.wait([book_task], timeout=min(1, self.timeout_seconds * .1))
+                    if authors and not book_task.done():
+                        book_task.cancel()
+                        await asyncio.gather(book_task, return_exceptions=True)
+                        resolved = await self._resolved_author(plan, authors, status)
+                        return replace(resolved, partial=True)
             book_error = None
             try:
                 outcome = await book_task
@@ -210,18 +250,8 @@ class SearchService:
             ]
             if authors:
                 if literal:
-                    self._adopt(plan)
-                    return SearchOutcome(
-                        plan,
-                        [],
-                        [],
-                        outcome.used_queries,
-                        query_choices=tuple(
-                            [f"книги {item.name}" for item in authors[:3]]
-                            + [f"«{plan.cleaned_query}»"]
-                        ),
-                        clarification="Это автор или название книги?",
-                    )
+                    self._remember(plan, outcome.books, authors)
+                    return replace(outcome, authors=authors)
                 return await self._resolved_author(plan, authors, status)
             from app.services.fuzzy_query import author_choices
 
@@ -230,7 +260,12 @@ class SearchService:
             names.extend(book.author for book in observed if book.author)
             if hasattr(self.client, "author_name_hints"):
                 names.extend(await self.client.author_name_hints())
-            choices = author_choices(plan.cleaned_query, names) if not literal else ()
+            from app.services.transliteration import latin_to_cyrillic
+            choices = author_choices(latin_to_cyrillic(plan.cleaned_query) or plan.cleaned_query, names) if not literal else ()
+            if len(choices) == 1:
+                validated = [item for item in candidates if author_name_matches(choices[0], item.name)]
+                if validated:
+                    return await self._resolved_author(plan, validated, status, suggestion=choices[0])
             if choices:
                 self._adopt(author_plan(plan, plan.cleaned_query))
                 return SearchOutcome(
@@ -282,6 +317,8 @@ class SearchService:
             )
             if suggestion:
                 return replace(outcome, suggested_query=suggestion)
+            if not outcome.books and status.source_unavailable:
+                search_status.get().source_unavailable = True
             if book_error:
                 raise book_error
             return outcome
@@ -330,6 +367,11 @@ class SearchService:
         candidates: list[SearchResult] = []
         queries = tuple(dict.fromkeys((*plan.primary_queries, *plan.fallback_queries)))
         for index, query in enumerate(queries):
+            state = _search_run.get()
+            if index and state and plan.catalog_lookup and any(
+                author_name_matches(plan.cleaned_query, a.name) for a in state.observed_authors.values()
+            ):
+                break
             used.append(query)
             try:
                 raw_books = await self._request("search", query, limit=self.book_limit)
@@ -348,6 +390,7 @@ class SearchService:
                 ranked = rank_and_dedupe_books(candidates, plan.cleaned_query)
                 state = _search_run.get()
                 self._remember(plan, ranked)
+                await self._publish(plan, ranked)
                 if state is None or not state.expanded:
                     return SearchOutcome(
                         plan, ranked, [], tuple(used), has_more=index + 1 < len(queries)
@@ -368,6 +411,7 @@ class SearchService:
             query,
         )
         self._remember(plan, [], authors)
+        await self._publish(plan, [], authors)
         choices = (
             author_query_choices(query, [item.name for item in candidates])
             if not authors
@@ -377,20 +421,49 @@ class SearchService:
             return _author_confirmation(plan, choices, (query,))
         return SearchOutcome(plan, [], authors, (query,))
 
-    async def _search_author_intent(self, plan: SearchPlan) -> SearchOutcome:
-        # Author intent is sticky: an empty/error author response must never
-        # become a literal book search returning biographies of that author.
+    async def _literal_name_title(self, plan):
+        # A natural name may also be a book title. Biographies are NOT a fallback.
+        status_token = search_status.set(SearchStatus())
         try:
-            outcome = await self._search_author_only(plan)
+            rows = await self._request("search", plan.cleaned_query, limit=self.book_limit)
+            return [b for b in rows if norm(base_title(b.title)) == norm(plan.cleaned_query)]
         except Exception:
-            return SearchOutcome(
-                plan,
-                [],
-                [],
-                (),
-                suggested_query=suggest_author_query(plan.author or plan.cleaned_query),
-            )
-        return await self._author_works(plan, outcome)
+            return []
+        finally:
+            search_status.reset(status_token)
+
+    async def _search_author_intent(self, plan: SearchPlan) -> SearchOutcome:
+        query = canonical_author_query(plan.author or plan.cleaned_query)
+        explicit = plan.original_query.casefold().strip().startswith(("книги ", "произведения ", "автор ", "автора "))
+        literal_task = (
+            asyncio.create_task(self._literal_name_title(plan))
+            if not explicit and not author_query_choices(query) else None
+        )
+        try:
+            try:
+                outcome = await self._search_author_only(plan)
+            except Exception:
+                return SearchOutcome(plan, [], [], (), suggested_query=suggest_author_query(query))
+            if outcome.suggested_query and not outcome.authors:
+                try:
+                    candidates = await self._collect_authors(outcome.suggested_query)
+                    authors = [a for a in candidates if author_name_matches(outcome.suggested_query, a.name)]
+                except Exception:
+                    authors = []
+                if len(authors) == 1:
+                    return await self._resolved_author(plan, authors, SearchStatus(), suggestion=outcome.suggested_query)
+            if literal_task:
+                books = await literal_task
+                if books:
+                    literal_plan = replace(plan, mode=SearchMode.EXACT, author=None)
+                    self._remember(literal_plan, books, outcome.authors)
+                    return SearchOutcome(literal_plan, books, outcome.authors, tuple(_search_run.get().used))
+            return await self._author_works(plan, outcome)
+        finally:
+            if literal_task and not literal_task.done():
+                literal_task.cancel()
+            if literal_task:
+                await asyncio.gather(literal_task, return_exceptions=True)
 
     async def _author_works(self, plan, outcome):
         if len(outcome.authors) != 1:
@@ -414,6 +487,7 @@ class SearchService:
                  for book in books
                  if not book.author or author_name_matches(author.name, book.author)]
         self._remember(plan, works, outcome.authors)
+        await self._publish(plan, works, outcome.authors)
         from app.services.works import group_books
         return replace(outcome, books=group_books(works, alphabetical=True),
                        author_id=author.author_id if page else None,
@@ -531,7 +605,8 @@ class SearchService:
             state.request_counts[method] = state.request_counts.get(method, 0) + 1
             state.used.append(query)
         try:
-            value = await getattr(self.client, method)(query, **kwargs)
+            async with asyncio.timeout(min(5 if method == "search" else 8, max(.02, self.timeout_seconds * .7))):
+                value = await getattr(self.client, method)(query, **kwargs)
         except Exception as exc:
             status = search_status.get()
             if status is not None:
@@ -549,8 +624,8 @@ class SearchService:
             state.books = rank_and_dedupe_books([*state.books, *books], plan.title or plan.cleaned_query)[:self.book_limit]
             state.authors = list({item.author_id: item for item in [*state.authors, *authors]}.values())[:self.author_limit]
 
-    async def _within_deadline(self, operation, plan, *, expanded=False):
-        state = _SearchRun(expanded=expanded, plan=plan)
+    async def _within_deadline(self, operation, plan, *, expanded=False, on_progress=None):
+        state = _SearchRun(expanded=expanded, plan=plan, on_progress=on_progress)
         status = SearchStatus()
         run_token = _search_run.set(state)
         status_token = search_status.set(status)
@@ -580,7 +655,10 @@ class SearchService:
 
 
 def author_name_matches(expected: str, actual: str) -> bool:
-    return names_match(expected, actual)
+    from app.services.transliteration import latin_to_cyrillic
+    return names_match(expected, actual) or bool(
+        latin_to_cyrillic(expected) and names_match(latin_to_cyrillic(expected), actual)
+    )
 
 
 def title_matches(expected: str, actual: str) -> bool:

@@ -129,12 +129,14 @@ def search_page(
     content = f'<div class="notice">{escape(notice)}</div>' if notice else ""
     if error:
         content += f'<div class="notice">{escape(error)}</div>'
-    elif clarification:
+    elif clarification and not books and not authors:
         content += f"<p>{escape(clarification)}</p>"
     elif not books and not authors and not suggested_query:
         content += ("<p>Автор не найден. Проверь имя или выбери другой способ поиска.</p>" if author_query
                     else "<p>Не удалось уверенно сопоставить весь запрос. Уточни название или автора.</p>")
     else:
+        if books and authors and not author_query:
+            content += "<p>Есть автор с таким именем и книги с таким названием.</p>"
         shown = books[page_number * 20:(page_number + 1) * 20]
         matches = shown if author_query or about_author else [book for book in shown if title_matches(match_query or query, book.title)]
         approximate = [book for book in shown if book not in matches]
@@ -148,7 +150,9 @@ def search_page(
             content += f"<h2>{heading}</h2>" + author_list(authors[page_number * 12:(page_number + 1) * 12])
     for choice in query_choices[:4]:
         content += search_link(choice, q=choice, expand="0")
-    if suggested_query:
+    if suggested_query and (books or authors):
+        content += f"<p>Возможно, вы искали: {escape(suggested_query)}</p>"
+    elif suggested_query:
         content += '<p>Вы имели в виду:</p>' + search_link(suggested_query, q=suggested_query, expand="0")
     if author_query:
         content += search_link("Книги об авторе", q=author_query, mode="about", expand="0")

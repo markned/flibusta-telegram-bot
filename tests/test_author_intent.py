@@ -49,7 +49,7 @@ def test_author_intent_never_falls_back_to_biographies(fail):
     client = Catalog(fail=fail)
     outcome = asyncio.run(service(client).search("лев толстой"))
     assert outcome.books == []
-    assert client.book_queries == []
+    assert len(client.book_queries) <= 1
     assert outcome.source_unavailable is fail
 
 
@@ -63,18 +63,19 @@ def test_full_name_excludes_other_author_with_same_surname_and_shows_works():
     outcome = asyncio.run(service(client).search("лев толстой"))
     assert [author.author_id for author in outcome.authors] == ["1"]
     assert {book.book_id for book in outcome.books} == {"200", "202"}
-    assert client.expanded == ["1"] and client.book_queries == []
+    assert client.expanded == ["1"] and client.book_queries == ["лев толстой"]
     assert not outcome.approximate
 
 
-def test_ambiguous_surname_requires_choice_without_loading_any_catalog():
+def test_surname_with_literal_title_displays_authors_and_title_without_expansion():
     client = Catalog(
         [AuthorResult("1", "Лев Толстой"), AuthorResult("2", "Алексей Толстой")]
     )
     outcome = asyncio.run(service(client).search("Толстой"))
-    assert outcome.plan.mode == SearchMode.AUTHOR
-    assert len(outcome.authors) == 2 and not outcome.books
-    assert not client.expanded and not client.book_queries
+    assert outcome.plan.mode == SearchMode.EXACT
+    assert len(outcome.authors) == 2
+    assert [b.book_id for b in outcome.books] == ["101"]
+    assert not client.expanded and len(client.book_queries) <= 1
 
 
 @pytest.mark.parametrize(
@@ -100,7 +101,7 @@ def test_typo_proposes_correction_without_loading_wrong_books():
     client = Catalog()
     outcome = asyncio.run(service(client).search("лев толтсой"))
     assert outcome.suggested_query == "Лев Толстой"
-    assert not outcome.books and not client.expanded and not client.book_queries
+    assert not outcome.books and not client.expanded and len(client.book_queries) <= 1
 
 
 def test_matching_full_names_requires_given_name_but_allows_patronymic_and_order():
@@ -127,7 +128,7 @@ def test_author_page_failure_keeps_author_without_biography_fallback():
     client = Client([AuthorResult("1", "Лев Толстой")])
     outcome = asyncio.run(service(client).search("лев толстой"))
     assert outcome.source_unavailable and outcome.authors and not outcome.books
-    assert not client.book_queries
+    assert client.book_queries == ["лев толстой"]
 
 
 def test_mismatched_author_page_identity_is_rejected():
@@ -182,7 +183,7 @@ def test_two_name_typos_require_confirmation_without_fragment_search(query):
     assert outcome.plan.mode==SearchMode.AUTHOR
     assert not outcome.books and not outcome.authors
     assert outcome.suggested_query==('Джейн Остин' if 'Остни' in query else 'Лев Толстой')
-    assert client.book_queries==[] and client.author_queries==[] and client.expanded==[]
+    assert client.book_queries==[] and len(client.author_queries)<=4 and client.expanded==[]
 
 
 def test_two_typo_suggestion_does_not_intercept_literal_titles_or_single_word():

@@ -1533,7 +1533,21 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
     log_user_action(message.from_user, message.chat.id, "smart_search_start", query=query)
     try:
         await telegram_retry(lambda: message.bot.send_chat_action(message.chat.id, ChatAction.TYPING), attempts=2)
-        outcome = await search_service.search(query)
+        async def show_progress(partial):
+            if partial.plan.mode == SearchMode.AUTHOR and partial.authors:
+                if partial.books and len(partial.authors) == 1:
+                    session = _create_search_session(message.from_user.id, message.chat.id, query, partial.books,
+                        title=f"<b>Книги автора: {escape(partial.authors[0].name)}</b>\nПроверяю остальные варианты…")
+                    await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
+                else:
+                    session = _create_author_session(message.from_user.id, message.chat.id, query, partial.authors)
+                    await _send_or_edit(message, progress, "<b>Нашёл автора</b>\nПроверяю книги и совпадения названия…", reply_markup=_author_results_keyboard(session))
+            elif partial.books:
+                session = _create_search_session(message.from_user.id, message.chat.id, query, partial.books,
+                    title="<b>Нашёл книги</b>\nПроверяю остальные варианты…")
+                await _send_or_edit(message, progress, _search_results_text(session), reply_markup=_search_results_keyboard(session))
+
+        outcome = await search_service.search(query, on_progress=show_progress)
     except FlibustaError as exc:
         await _send_or_edit(message, progress, str(exc))
         return False
@@ -1553,17 +1567,17 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
         await _send_or_edit(message, progress, notice + "Я ищу по названию и автору. Напиши конкретную книгу, автора или их вместе.")
         return False
 
-    if outcome.query_choices or (outcome.suggested_query and plan.mode != SearchMode.AUTHOR):
+    if outcome.query_choices or (outcome.suggested_query and plan.mode != SearchMode.AUTHOR and not outcome.books and not outcome.authors):
         choices = outcome.query_choices or (outcome.suggested_query,)
         text = outcome.clarification or "Вы имели в виду:"
         await _send_or_edit(message, progress, notice + escape(text), reply_markup=_query_choice_keyboard(message,choices))
         return False
 
+    if outcome.suggested_query and (outcome.books or outcome.authors):
+        notice += f"Возможно, вы искали: <b>{escape(outcome.suggested_query)}</b>\n\n"
     books = outcome.books
     authors = outcome.authors
     used_query = outcome.used_queries[-1] if outcome.used_queries else plan.cleaned_query
-    top_book_is_exact = bool(books and _norm(_base_title(books[0].title)) == _norm(plan.title or plan.cleaned_query))
-    top_author_is_exact = bool(authors and _norm(authors[0].name) == _norm(plan.author or plan.cleaned_query))
 
     if plan.mode == SearchMode.AUTHOR:
         author_query = plan.author or plan.cleaned_query
@@ -1596,10 +1610,10 @@ async def send_smart_results(message: Message, query: str, *, show_no_results: b
         await _send_or_edit(message, progress, notice + _search_results_text(session), reply_markup=_search_results_keyboard(session))
         return True
 
-    if books and authors and not top_book_is_exact and not top_author_is_exact:
+    if books and authors:
         book_session = _create_search_session(message.from_user.id, message.chat.id, used_query, books)
         author_session = _create_author_session(message.from_user.id, message.chat.id, used_query, authors)
-        await _send_or_edit(message, progress, notice + _combined_results_text(used_query, books, authors), reply_markup=_combined_results_keyboard(book_session, author_session))
+        await _send_or_edit(message, progress, notice + "<b>Есть автор с таким именем и книги с таким названием</b>\n\n" + _combined_results_text(plan.cleaned_query, books, authors), reply_markup=_combined_results_keyboard(book_session, author_session))
         return True
 
     if books:

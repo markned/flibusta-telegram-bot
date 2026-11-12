@@ -28,6 +28,8 @@ STOP_WORDS = {
 
 def author_queries(query):
     words = norm(query).split()
+    from app.services.transliteration import latin_to_cyrillic
+    translit = latin_to_cyrillic(query)
     variants = [query]
     if len(words) > 1:
         last = words[-1]
@@ -51,8 +53,9 @@ def author_queries(query):
     if len(words) == 2:
         variants = [
             query,
+            words[-1],
             anchor_prefix(words[-1]),
-            anchor_prefix(words[0]),
+            words[0],
             *variants[1:],
         ]
     else:
@@ -64,6 +67,8 @@ def author_queries(query):
                     words[-1] if len(words[-1]) >= 5 else max(long_words, key=len)
                 ),
             )
+    if translit:
+        variants = [query, translit, *author_queries(translit)[1:]]
     return tuple(dict.fromkeys(variants))[:4]
 
 

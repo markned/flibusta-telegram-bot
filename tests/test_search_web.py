@@ -284,7 +284,7 @@ def test_web_two_name_typos_offer_confirmation_without_claiming_catalog_absence(
     from app.services.search import SearchService
     class Catalog:
         async def search(self,*args,**kwargs): raise AssertionError('no fragment search')
-        async def search_authors(self,*args,**kwargs): raise AssertionError('no lookup before confirmation')
+        async def search_authors(self,*args,**kwargs): return []
     async def scenario():
         async with browser(tmp_path,SearchService(Catalog(),book_limit=40,author_limit=20)) as client:
             response=await client.get('/search',params={'q':'Леа Толстнй'})
